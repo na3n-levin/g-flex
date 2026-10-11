@@ -1,0 +1,1 @@
+select{width:100%;border:1px solid var(--line);background:#fcfdf9;padding:8px 9px;color:var(--ink);font:12px 'Space Grotesk',sans-serif;outline:none}select:focus{border-color:var(--green)}

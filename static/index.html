@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lensing simulator</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/overrides.css">
+  <link rel="stylesheet" href="/viewer.css">
+  <link rel="stylesheet" href="/stretch.css">
+  <link rel="stylesheet" href="/controls.css">
+  <link rel="stylesheet" href="/diagram.css">
+</head>
+<body>
+  <header class="topbar"><div><span class="eyebrow">FORWARD LENSING</span><h1>Lensing simulator</h1></div><div class="status"><span class="status-dot"></span><span id="statusText">Ready</span></div></header>
+  <main class="workspace">
+    <aside class="palette"><div class="section-head"><span>Palette</span><small>drag to add</small></div>
+      <div class="palette-menu"><div class="palette-group"><h2>Lens components</h2><div id="lensPalette" class="palette-list"></div></div></div>
+      <div class="palette-menu"><div class="palette-group"><h2>Source components</h2><div id="sourcePalette" class="palette-list"></div></div></div>
+    </aside>
+    <section class="canvas"><div id="canvasPageHead" class="section-head"><span>Model canvas</span><small>reorder components by dragging</small></div><div id="dropzone" class="dropzone"><div id="emptyState" class="empty-state"><span class="empty-icon">+</span><strong>Drop a lens or source here</strong><small>Build the system from the palette</small></div><div id="components"></div></div>
+      <div class="canvas-actions"><button id="previewBtn" class="button secondary">Preview input</button><button id="runBtn" class="button primary">Run simulation <span>→</span></button></div>
+    </section>
+    <aside class="inspector"><div class="section-head"><span>Setup</span><small>simulation frame</small></div><div class="field-grid"><label>Omega matter<input data-config="omega" type="number" step="0.001" value="0.315"></label><label>Lambda dark energy<input data-config="lambda" type="number" step="0.001" value="0.685"></label><label>Dark-energy EOS<input data-config="weos" type="number" step="0.001" value="-1.03"></label><label>Hubble<input data-config="hubble" type="number" step="0.001" value="0.674"></label><label>Pixel ext<input data-config="pix_ext" type="number" step="0.001" value="0.02"></label><label>Pixel point<input data-config="pix_poi" type="number" step="0.001" value="0.02"></label><label>View xmin<input data-config="xmin" type="number" value="-5"></label><label>View xmax<input data-config="xmax" type="number" value="5"></label><label>View ymin<input data-config="ymin" type="number" value="-5"></label><label>View ymax<input data-config="ymax" type="number" value="5"></label></div><div class="output-panel"><div class="section-head"><span>Output</span><small>non-RGB mode</small></div><pre id="output">Preview or run a model to inspect the generated input.</pre><section id="latestImageBox" class="latest-image-box" hidden><div class="image-box-head"><span>Latest I-band</span><label class="overlay-toggle"><input id="criticalOverlayToggle" type="checkbox"> critical curves</label><button id="fullscreenBtn" class="icon-button" title="Open image fullscreen">⛶</button></div><div class="image-stage"><img id="latestImage" alt="Latest noisy I-band simulation"><canvas id="imageOverlayCanvas" aria-hidden="true"></canvas></div></section><div id="imageHistory" class="image-history"></div></div></aside>
+  </main>
+  <div id="fullscreenOverlay" class="fullscreen-overlay" hidden><button id="closeFullscreenBtn" class="close-fullscreen" title="Close fullscreen">×</button><canvas id="fullscreenCanvas" aria-label="Fullscreen noisy I-band simulation"></canvas><label class="stretch-control"><input id="fullscreenCriticalOverlayToggle" type="checkbox"> Critical curves <span>Asinh Q</span> <input id="stretchSlider" type="range" min="0" max="4" step="0.01" value="1.08"><output id="stretchValue">12</output></label></div>
+  <dialog id="spectrumDialog"><div class="spectrum-dialog-head"><h2 id="spectrumTitle">Spectrum</h2><button id="closeSpectrumBtn" class="icon-button" title="Close spectrum plot">×</button></div><canvas id="spectrumCanvas" width="720" height="360" aria-label="Spectrum plot"></canvas></dialog>
+  <script src="/app.js"></script>
+</body>
+</html>
