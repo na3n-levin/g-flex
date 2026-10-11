@@ -1,4 +1,4 @@
-# Lensing simulator website
+# Introduction
 
 Glafic - Forward Lensing EXplorer (G-FLEX) is a browser-based front end for building and running gravitational lensing simulations with `glafic`, then producing a Euclid-like VIS I-band preview. It is designed for interactive exploration: you can assemble lens mass models and source light models, adjust parameters, preview the generated `glafic` input, and run the simulation to produce a noisy synthetic image.
 
