@@ -18,7 +18,7 @@ const LENS_PARAMETER_SPECS = {
   point: [[0,'z_lens'],[1,'M_total'],[2,'x'],[3,'y']],
   sie: [[0,'z_lens'],[1,'sigma'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'r_core']],
   jaffe: [[0,'z_lens'],[1,'sigma'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'r_trunc'],[7,'r_core']],
-  pow: [[0,'z_fid'],[1,'r_Ein'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'gamma']],
+  pow: [[0,'z_lens'],[1,'z_source (fiducial)'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'PA'],[6,'r_Ein'],[7,'power-law index']],
   powpot: [[0,'z_fid'],[1,'r_Ein'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'gamma']],
   sers: [[0,'z_lens'],[1,'M_total (Msun)'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'r_e'],[7,'n']],
   serspot: [[0,'z_lens'],[1,'M_total'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'r_e'],[7,'n']],
@@ -198,7 +198,7 @@ function defaultParameters(category, kind) {
   if (category === 'lens') {
     if (kind === 'point') return ['0.3','1e11','0','0'];
     if (kind === 'sie') return ['0.3','200','0','0','0.2','0','0.01','0'];
-    if (kind === 'pow') return ['0.3','1','0','0','0.2','0','2','0'];
+    if (kind === 'pow') return ['0.3','1','0','0','0.2','0','1','2'];
     if (kind === 'sers') return ['0.3','1e11','0','0','0.2','0','0.5','4'];
     if (kind === 'gaupot') return ['0.3','0.05','0','0','0.2','0','0.5','0'];
     return ['0.3','1e11','0','0','0.2','0','1','0'];

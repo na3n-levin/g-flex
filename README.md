@@ -53,6 +53,8 @@ Supported source/light kinds include:
 
 Each component has parameter fields that match the `glafic` input conventions. Values may reference variables defined in the Functions tab using `$name`, and NumPy functions are available as `np`. All defined variables should be preceded by `$` (e.g. $lens_z). The default scaling laws can be accessed in the 'Functions' tab by clicking on them or writing out the full function name. Note that default functions have to be preceded by `!`. For more examples, load the example preset.
 
+The elliptical power-law lens parameters are ordered as `lens_z`, fiducial `source_z`, `x`, `y`, ellipticity, PA, Einstein radius, and power-law index.
+
 The app stores UI metadata separately from the input file. For example, `web_metadata.json` contains photometric information like luminosity, spectral template choice, and lens mass-to-light ratios; this metadata is not sent directly to `glafic`.
 
 ### 2. Preview the generated input
