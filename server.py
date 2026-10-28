@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +39,7 @@ from ui import ConsoleReporter, LogLevel  # noqa: E402
 
 SAFE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_FUNCTION = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+SAFE_BATCH_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,71}$")
 
 LENS_MODELS = [
     {"id": "sers", "label": "Sersic", "help": "elliptical mass profile", "count": 8},
@@ -51,6 +54,11 @@ SOURCE_MODELS = [
     {"id": "gauss", "label": "Gaussian light", "help": "soft extended light", "count": 7},
 ]
 FUNCTIONS = [
+    {"id": "parameters.sample_normal", "label": "Normal distribution", "help": "Sample from N(mean, standard deviation) for each batch run", "args": ["mean", "standard_deviation"], "argHelp": ["distribution mean", "distribution standard deviation"]},
+    {"id": "parameters.sample_uniform", "label": "Uniform distribution", "help": "Sample uniformly between low and high for each batch run", "args": ["low", "high"], "argHelp": ["lower bound", "upper bound"]},
+    {"id": "parameters.sample_lognormal", "label": "Log-normal distribution", "help": "Sample from a log-normal distribution for each batch run", "args": ["mean", "sigma"], "argHelp": ["underlying normal mean", "underlying normal sigma"]},
+    {"id": "parameters.sample_exponential", "label": "Exponential distribution", "help": "Sample from an exponential distribution for each batch run", "args": ["scale"], "argHelp": ["distribution scale"]},
+    {"id": "parameters.sample_choice", "label": "Choice distribution", "help": "Choose one of the supplied values for each batch run", "args": ["value1", "value2"], "argHelp": ["choice values"]},
     {"id": "parameters.log10", "label": "Base-10 logarithm", "help": "Calculate log10 of a positive value", "args": ["value"], "argHelp": ["positive numeric value"]},
     {"id": "parameters.halo_concentration_mass", "label": "Halo concentration c_vir", "help": "NFW concentration from halo mass and redshift", "args": ["halo_mass", "redshift"], "argHelp": ["virial halo mass (solar masses)", "lens redshift"]},
     {"id": "parameters.galaxy_effective_radius_mass", "label": "Galaxy effective radius R_e", "help": "Galaxy size from redshift, stellar mass, and galaxy type", "args": ["redshift", "log10_stellar_mass", "galaxy_type"], "argHelp": ["galaxy redshift", "log10 stellar mass (solar masses)", "early or late"]},
@@ -72,6 +80,8 @@ LUMINOUS_LENS_KINDS = {"sers"}
 LEGACY_LENS_ALIASES = {"gauss": "gaupot"}
 curve_processes: set[subprocess.Popen] = set()
 curve_process_lock = threading.Lock()
+jobs: dict[str, dict] = {}
+jobs_lock = threading.Lock()
 
 
 def catalog() -> dict:
@@ -139,7 +149,7 @@ def view_bounds(config: dict) -> dict[str, float]:
     return values
 
 
-def input_text(payload: dict) -> str:
+def input_text(payload: dict, *, batch_count: int | None = None) -> str:
     config = payload.get("config", {})
     view_bounds(config)
     variables = payload.get("variables", [])
@@ -158,7 +168,15 @@ def input_text(payload: dict) -> str:
         f"pix_ext {number(config.get('pix_ext'), 'pix_ext')}",
         f"pix_poi {number(config.get('pix_poi'), 'pix_poi')}",
     ]
-    for variable in variables:
+    function_text = str(payload.get("functionText", "")).strip()
+    function_variables = []
+    for line in function_text.splitlines():
+        match = re.match(r"^\s*\$?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*(?:#.*)?$", line)
+        if match and match.group(2):
+            function_variables.append({"name": match.group(1), "value": match.group(2)})
+    variables_by_name = {str(item.get("name", "")).strip(): item for item in variables}
+    variables_by_name.update({item["name"]: item for item in function_variables})
+    for variable in variables_by_name.values():
         name = str(variable.get("name", "")).strip()
         value = str(variable.get("value", "")).strip()
         if not SAFE_NAME.fullmatch(name) or not value or "\n" in value or "\r" in value:
@@ -170,6 +188,8 @@ def input_text(payload: dict) -> str:
         if not SAFE_FUNCTION.fullmatch(function_id) or not arguments or "\n" in arguments or "\r" in arguments:
             raise ValueError("Invalid function expression")
         lines.append(f"$fn_{index}=!{function_id}({arguments})")
+    if batch_count is not None:
+        lines.insert(0, f"mode rng {batch_count}")
 
     source_kinds = [str(item.get("kind", "sersic")).strip().lower() for item in sources]
     lines.append(f"startup {len(lenses)} {sum(kind != 'point' for kind in source_kinds)} {sum(kind == 'point' for kind in source_kinds)}")
@@ -364,6 +384,19 @@ def generate_critical_curves(run_dir: Path, source_redshift: str, cache_path: Pa
 def validate_payload(payload: dict) -> None:
     if not isinstance(payload, dict):
         raise ValueError("Request must be a JSON object")
+    run_mode = str(payload.get("runMode", "single")).lower()
+    if run_mode not in {"single", "batch"}:
+        raise ValueError("runMode must be 'single' or 'batch'")
+    if run_mode == "batch":
+        batch_name = str(payload.get("batchName", "")).strip()
+        if not SAFE_BATCH_NAME.fullmatch(batch_name):
+            raise ValueError("Batch name must be 1-72 characters and contain only letters, numbers, spaces, '.', '_' or '-'")
+        try:
+            batch_count = int(payload.get("batchCount", 0))
+        except (TypeError, ValueError) as error:
+            raise ValueError("Batch run count must be an integer") from error
+        if batch_count < 1 or batch_count > 10000:
+            raise ValueError("Batch run count must be between 1 and 10000")
     if not payload.get("lenses"):
         raise ValueError("Add at least one lens component")
     if not payload.get("sources"):
@@ -393,18 +426,18 @@ def validate_payload(payload: dict) -> None:
             raise ValueError("Unsupported function reference")
 
 
-def recent_images(limit: int = 3) -> list[dict[str, str]]:
+def recent_images(limit: int = 50) -> list[dict[str, object]]:
     candidates = []
-    for image in OUT.glob("*/ie_band.png"):
+    for image in OUT.rglob("ie_band.png"):
         candidates.append((image.stat().st_mtime_ns, image))
     candidates.sort(key=lambda item: item[0], reverse=True)
-    for _, image in candidates[limit:]:
-        for old_image in (image, image.with_suffix(".jpg"), image.with_name("ie_band_data.json")):
-            if old_image.exists():
-                old_image.unlink()
     results = []
     for _, image in candidates[:limit]:
-        result = {"name": image.parent.name, "image": "/" + str(image.relative_to(ROOT)).replace("\\", "/")}
+        result = {
+            "name": image.parent.name,
+            "image": "/" + str(image.relative_to(ROOT)).replace("\\", "/"),
+            "created": image.stat().st_mtime_ns,
+        }
         data_path = image.with_name("ie_band_data.json")
         if data_path.exists():
             result["data"] = "/" + str(data_path.relative_to(ROOT)).replace("\\", "/")
@@ -418,6 +451,165 @@ def recent_images(limit: int = 3) -> list[dict[str, str]]:
             result["lensInfo"] = diagnostics.get("lensInfo", {"r": [], "kappa": [], "magnification": []})
         results.append(result)
     return results
+
+
+def run_result_path(name: object) -> Path:
+    run_name = str(name).strip()
+    if not re.fullmatch(r"web_run_[0-9]+", run_name):
+        raise ValueError("Invalid result id")
+    target = (OUT / run_name).resolve()
+    if OUT.resolve() not in target.parents:
+        raise ValueError("Invalid result path")
+    return target
+
+
+def create_residual(result_a: object, result_b: object) -> dict[str, str | float | int]:
+    path_a = run_result_path(result_a)
+    path_b = run_result_path(result_b)
+    data_a_path = path_a / "ie_band_data.json"
+    data_b_path = path_b / "ie_band_data.json"
+    if not data_a_path.is_file() or not data_b_path.is_file():
+        raise ValueError("Both selected results must have image data")
+    data_a = json.loads(data_a_path.read_text(encoding="utf-8"))
+    data_b = json.loads(data_b_path.read_text(encoding="utf-8"))
+    values_a = np.asarray(data_a.get("values"), dtype=float)
+    values_b = np.asarray(data_b.get("values"), dtype=float)
+    if values_a.ndim != 2 or values_b.ndim != 2 or values_a.shape != values_b.shape:
+        raise ValueError("Selected results must have matching image dimensions")
+    residual = values_a - values_b
+    comparison_id = hashlib.sha256(f"{path_a.name}:{path_b.name}".encode("utf-8")).hexdigest()[:16]
+    comparison_dir = OUT / ".comparisons"
+    comparison_dir.mkdir(exist_ok=True)
+    residual_path = comparison_dir / f"{comparison_id}.png"
+    if not residual_path.exists():
+        limit = float(np.percentile(np.abs(residual), 99.5))
+        limit = max(limit, np.finfo(float).eps)
+        figure, axis = plt.subplots(figsize=(6, 5), constrained_layout=True)
+        image = axis.imshow(residual, cmap="coolwarm", vmin=-limit, vmax=limit)
+        axis.set_title(f"Residual: {path_a.name} - {path_b.name}")
+        axis.set_axis_off()
+        figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04, label="normalized intensity")
+        figure.savefig(residual_path, dpi=150, facecolor="white")
+        plt.close(figure)
+    return {
+        "image": "/" + str((path_a / "ie_band.png").relative_to(ROOT)).replace("\\", "/"),
+        "imageB": "/" + str((path_b / "ie_band.png").relative_to(ROOT)).replace("\\", "/"),
+        "residual": "/" + str(residual_path.relative_to(ROOT)).replace("\\", "/"),
+        "width": int(values_a.shape[1]),
+        "height": int(values_a.shape[0]),
+        "maxAbsoluteResidual": float(np.max(np.abs(residual))),
+    }
+
+
+def _render_result(payload: dict, result, diagnostic_executor: ThreadPoolExecutor, diagnostic_futures: list) -> dict:
+    metadata = {
+        "lenses": payload.get("lenses", []),
+        "sources": payload.get("sources", []),
+        "view": view_bounds(payload.get("config", {})),
+    }
+    (result.output_dir / "web_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    image = render_i_band(result.output_dir, seed=int(payload.get("seed", 42)), metadata=metadata)
+    source_redshift = parameter_token(payload["sources"][0]["parameters"][0], "source redshift")
+    cache_identity = hashlib.sha256((result.output_dir / "run.input").read_bytes()).hexdigest()[:24]
+    cache_path = CURVE_CACHE / f"{cache_identity}.json"
+    cached_diagnostics = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else None
+    if isinstance(cached_diagnostics, dict) and "lensInfo" in cached_diagnostics:
+        publish_curve_result(result.output_dir, cached_diagnostics)
+        write_lens_info_plot(result.output_dir, cached_diagnostics["lensInfo"])
+        curves = cached_diagnostics
+        curves_pending = False
+    else:
+        diagnostic_futures.append(
+            diagnostic_executor.submit(generate_critical_curves, result.output_dir, source_redshift, cache_path)
+        )
+        curves = empty_diagnostics()
+        curves_pending = True
+    output = str(result.output_dir.relative_to(ROOT)).replace("\\", "/")
+    data_path = result.output_dir / "ie_band_data.json"
+    return {
+        "name": result.name,
+        "output": output,
+        "image": "/" + str(image.relative_to(ROOT)).replace("\\", "/"),
+        "data": "/" + str(data_path.relative_to(ROOT)).replace("\\", "/") if data_path.exists() else None,
+        "curves": curves,
+        "lensInfo": curves.get("lensInfo", {"r": [], "kappa": [], "magnification": []}),
+        "lensInfoImage": "/" + str((result.output_dir / "lens_info.png").relative_to(ROOT)).replace("\\", "/") if not curves_pending else None,
+        "diagnosticsPending": curves_pending,
+        "diagnosticsUrl": f"/{output}/web_curves.json" if curves_pending else None,
+    }
+
+
+def _run_job(job_id: str, payload: dict, text: str) -> None:
+    with jobs_lock:
+        job = jobs[job_id]
+        job["status"] = "running"
+    diagnostic_futures = []
+    rendered: list[dict] = []
+    diagnostic_executor = ThreadPoolExecutor(max_workers=os.cpu_count() or 1)
+
+    def on_result(result, completed: int, total: int) -> None:
+        entry = _render_result(payload, result, diagnostic_executor, diagnostic_futures)
+        with jobs_lock:
+            rendered.append(entry)
+            job["completed"] = completed
+            job["total"] = total
+            job["phase"] = "Rendering latest runs and computing diagnostics"
+            job["images"] = sorted(rendered, key=lambda item: item["name"], reverse=True)
+
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "web.input"
+            source.write_text(text, encoding="utf-8")
+            parsed = parse_input_file(source)
+            run_mode = str(payload.get("runMode", "single")).lower()
+            batch_root = OUT
+            fallback_name = f"web_run_{time.time_ns()}"
+            if run_mode == "batch":
+                batch_name = str(payload["batchName"]).strip()
+                batch_root = OUT / "batch" / batch_name
+                batch_root.mkdir(parents=True, exist_ok=True)
+                fallback_name = f"{batch_name}_{time.time_ns()}"
+            execute_runs(
+                parsed,
+                workspace_root=ROOT,
+                out_root=batch_root,
+                fallback_name=fallback_name,
+                reporter=ConsoleReporter(LogLevel.QUIET),
+                max_workers=os.cpu_count() or 1,
+                result_callback=on_result,
+            )
+        for future in as_completed(diagnostic_futures):
+            future.result()
+        with jobs_lock:
+            for entry in rendered:
+                curves_path = ROOT / entry["output"] / "web_curves.json"
+                if curves_path.exists():
+                    diagnostics = json.loads(curves_path.read_text(encoding="utf-8"))
+                    entry.update(
+                        curves=diagnostics,
+                        lensInfo=diagnostics.get("lensInfo", entry["lensInfo"]),
+                        lensInfoImage="/" + str((ROOT / entry["output"] / "lens_info.png").relative_to(ROOT)).replace("\\", "/") if (ROOT / entry["output"] / "lens_info.png").exists() else None,
+                        diagnosticsPending=False,
+                        diagnosticsUrl=None,
+                    )
+            job["images"] = sorted(rendered, key=lambda item: item["name"], reverse=True)
+            job["status"] = "complete"
+            job["phase"] = f"Runs saved to {(batch_root if run_mode == 'batch' else OUT).relative_to(ROOT)}"
+            job["output"] = text
+    except Exception as error:
+        with jobs_lock:
+            job["status"] = "error"
+            job["error"] = str(error)
+    finally:
+        diagnostic_executor.shutdown(wait=True)
+
+
+def job_snapshot(job_id: str) -> dict:
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            raise ValueError("Unknown run job")
+        return dict(job)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -439,6 +631,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/presets":
             self.send_json({"presets": list_presets()})
+            return
+        if path == "/api/results":
+            self.send_json({"results": recent_images()})
+            return
+        if path.startswith("/api/jobs/"):
+            try:
+                self.send_json(job_snapshot(unquote(path.removeprefix("/api/jobs/"))))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, HTTPStatus.NOT_FOUND)
             return
         if path.startswith("/api/spectrum/"):
             try:
@@ -462,7 +663,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             body = target.read_bytes()
-            content_type = "image/png" if target.suffix == ".png" else "application/json; charset=utf-8" if target.suffix == ".json" else "text/plain; charset=utf-8"
+            content_type = "image/png" if target.suffix == ".png" else "application/fits" if target.suffix == ".fits" else "application/json; charset=utf-8" if target.suffix == ".json" else "text/plain; charset=utf-8"
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -500,6 +701,18 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
                 self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return
+        if path == "/api/compare":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length))
+                result_a = payload.get("resultA")
+                result_b = payload.get("resultB")
+                if result_a == result_b:
+                    raise ValueError("Choose two different past results")
+                self.send_json({"comparison": create_residual(result_a, result_b)})
+            except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as error:
+                self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
         if path not in {"/api/preview", "/api/run"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -507,7 +720,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length))
             validate_payload(payload)
-            text = input_text(payload)
+            run_mode = str(payload.get("runMode", "single")).lower()
+            batch_count = int(payload.get("batchCount", 1)) if run_mode == "batch" else None
+            text = input_text(payload, batch_count=batch_count)
             if path == "/api/preview":
                 with tempfile.TemporaryDirectory() as directory:
                     source = Path(directory) / "web.input"
@@ -517,40 +732,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             stop_curve_jobs()
             OUT.mkdir(exist_ok=True)
-            with tempfile.TemporaryDirectory() as directory:
-                source = Path(directory) / "web.input"
-                source.write_text(text, encoding="utf-8")
-                parsed = parse_input_file(source)
-                results = execute_runs(parsed, workspace_root=ROOT, out_root=OUT, fallback_name=f"web_run_{time.time_ns()}", reporter=ConsoleReporter(LogLevel.QUIET), max_workers=1)
-            rendered = []
-            for result in results:
-                metadata = {"lenses": payload.get("lenses", []), "sources": payload.get("sources", []), "view": view_bounds(payload.get("config", {}))}
-                (result.output_dir / "web_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-                image = render_i_band(result.output_dir, seed=int(payload.get("seed", 42)), metadata=metadata)
-                (result.output_dir / "web_curves.json").unlink(missing_ok=True)
-                output = str(result.output_dir.relative_to(ROOT)).replace("\\", "/")
-                source_redshift = parameter_token(payload["sources"][0]["parameters"][0], "source redshift")
-                cache_path = CURVE_CACHE / f"{curve_cache_key(payload)}.json"
-                cached_diagnostics = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else None
-                if isinstance(cached_diagnostics, dict) and "lensInfo" in cached_diagnostics:
-                    shutil.copyfile(cache_path, result.output_dir / "web_curves.json")
-                    curves = cached_diagnostics
-                    write_lens_info_plot(result.output_dir, curves["lensInfo"])
-                    curves_pending = False
-                else:
-                    threading.Thread(target=generate_critical_curves, args=(result.output_dir, source_redshift, cache_path), daemon=True).start()
-                    curves = empty_diagnostics()
-                    curves_pending = True
-                rendered.append({"name": result.name, "output": output, "image": "/" + str(image.relative_to(ROOT)).replace("\\", "/"), "curves": curves, "lensInfo": curves.get("lensInfo", {"r": [], "kappa": [], "magnification": []}), "lensInfoImage": "/" + str((result.output_dir / "lens_info.png").relative_to(ROOT)).replace("\\", "/") if not curves_pending else None, "diagnosticsPending": curves_pending})
-            images = recent_images()
-            for entry in images:
-                matching = next((run for run in rendered if run["name"] == entry["name"]), None)
-                if matching is not None:
-                    entry["diagnosticsPending"] = matching["diagnosticsPending"]
-                    entry["lensInfoImage"] = matching["lensInfoImage"]
-                    if matching["diagnosticsPending"]:
-                        entry["diagnosticsUrl"] = f"/{matching['output']}/web_curves.json"
-            self.send_json({"input": text, "results": rendered, "images": images})
+            job_id = f"job_{time.time_ns()}"
+            with jobs_lock:
+                jobs[job_id] = {
+                    "jobId": job_id,
+                    "status": "queued",
+                    "phase": "Starting",
+                    "completed": 0,
+                    "total": batch_count or 1,
+                    "images": [],
+                }
+            threading.Thread(target=_run_job, args=(job_id, payload, text), daemon=True).start()
+            self.send_json({"jobId": job_id}, HTTPStatus.ACCEPTED)
         except Exception as error:
             self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
 

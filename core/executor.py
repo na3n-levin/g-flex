@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import numpy as np
+from astropy.io import fits
 
 from parser import ExpansionAxis
 from runs import EnsembleRun, GlaficRun
@@ -115,6 +119,47 @@ def _write_run_input(run: GlaficRun, input_path: Path) -> None:
     input_path.write_text(run.to_input_text(), encoding="utf-8")
 
 
+def _write_run_header(run: GlaficRun, header_path: Path) -> None:
+    header_path.write_text(
+        json.dumps(
+            {
+                "config": run.cfg,
+                "variables": run.variables,
+                "lenses": [lens.evaluate() for lens in run.lenses],
+                "sources": [source.evaluate() for source in run.sources],
+            },
+            indent=2,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _copy_unstretched_fits(run_out_dir: Path) -> None:
+    source_names = ("_image.fits", "_source.fits")
+    missing = [source_name for source_name in source_names if not (run_out_dir / source_name).is_file()]
+    if missing:
+        missing_names = ", ".join(missing)
+        raise RuntimeError(f"glafic did not produce required unstretched FITS product(s): {missing_names}")
+    shutil.copyfile(run_out_dir / "_image.fits", run_out_dir / "lensed_image_only.fits")
+    shutil.copyfile(run_out_dir / "_source.fits", run_out_dir / "lensing_galaxy_light.fits")
+    with fits.open(run_out_dir / "_image.fits", memmap=False) as image_hdul, fits.open(
+        run_out_dir / "_source.fits", memmap=False
+    ) as source_hdul:
+        image_data = image_hdul[0].data
+        source_data = source_hdul[0].data
+        if image_data is None or source_data is None:
+            raise RuntimeError("glafic FITS products must contain primary image data")
+        if image_data.shape != source_data.shape:
+            raise RuntimeError(
+                f"Cannot combine FITS products with different shapes: {image_data.shape} and {source_data.shape}"
+            )
+        combined = np.asarray(image_data, dtype=np.float64) + np.asarray(source_data, dtype=np.float64)
+        header = image_hdul[0].header.copy()
+    fits.PrimaryHDU(data=combined, header=header).writeto(run_out_dir / "lens_image.fits", overwrite=True)
+
+
 def prepare_run_inputs(
     parsed: GlaficRun | EnsembleRun,
     *,
@@ -141,6 +186,7 @@ def prepare_run_inputs(
         run_copy.cfg["prefix"] = str(run_out_dir.resolve()) + os.sep
         input_path = run_out_dir / "run.input"
         _write_run_input(run_copy, input_path)
+        _write_run_header(run_copy, run_out_dir / "header.json")
         input_paths.append(input_path)
 
     return input_paths
@@ -184,6 +230,8 @@ def _run_glafic_job(
             f"glafic failed for '{run_name}' with exit code {completed.returncode}. See {stderr_path}"
         )
 
+    _copy_unstretched_fits(run_out_dir)
+
     return RunResult(
         name=run_name,
         returncode=completed.returncode,
@@ -202,6 +250,7 @@ def execute_runs(
     max_workers: int | None = None,
     fallback_name: str | None = None,
     reporter: ConsoleReporter | None = None,
+    result_callback: Any | None = None,
 ) -> list[RunResult]:
     runs = [parsed] if isinstance(parsed, GlaficRun) else parsed.runs
     valid_runs = [run for run in runs if not _has_invalid_redshift_order(run)]
@@ -232,6 +281,8 @@ def execute_runs(
             str(out_path),
             glafic_executable,
         )
+        if result_callback is not None:
+            result_callback(result, 1, 1)
         reporter.progress(1, 1, run_name)
         reporter.progress_done()
         reporter.stage(f"Finished {run_name}")
@@ -249,9 +300,12 @@ def execute_runs(
     reporter.stage("Running jobs")
     reporter.progress(0, total_runs, "starting")
 
-    with ProcessPoolExecutor(max_workers=max_workers or os.cpu_count() or 1) as executor:
-        for run in runs:
-            run_name = build_run_name(run, axes, fallback_name=fallback_name)
+    with ThreadPoolExecutor(max_workers=max_workers or os.cpu_count() or 1) as executor:
+        for index, run in enumerate(runs, start=1):
+            run_fallback = fallback_name
+            if not axes and fallback_name:
+                run_fallback = f"{fallback_name}_{index:04d}"
+            run_name = build_run_name(run, axes, fallback_name=run_fallback)
             futures.append(
                 executor.submit(
                     _run_glafic_job,
@@ -274,6 +328,8 @@ def execute_runs(
             results.append(result)
             completed += 1
             reporter.progress(completed, total_runs, result.name)
+            if result_callback is not None:
+                result_callback(result, completed, total_runs)
 
     reporter.progress_done()
     reporter.stage(f"Finished {total_runs} runs")

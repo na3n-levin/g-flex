@@ -91,6 +91,33 @@ def log10(value):
 	return result.item() if result.ndim == 0 else result
 
 
+def sample_normal(mean, standard_deviation):
+	"""Draw one value from a normal distribution."""
+	return float(np.random.default_rng().normal(float(mean), float(standard_deviation)))
+
+
+def sample_uniform(low, high):
+	"""Draw one value from a uniform distribution."""
+	return float(np.random.default_rng().uniform(float(low), float(high)))
+
+
+def sample_lognormal(mean, sigma):
+	"""Draw one value from a log-normal distribution."""
+	return float(np.random.default_rng().lognormal(float(mean), float(sigma)))
+
+
+def sample_exponential(scale):
+	"""Draw one value from an exponential distribution."""
+	return float(np.random.default_rng().exponential(float(scale)))
+
+
+def sample_choice(*values):
+	"""Draw one value uniformly from the supplied choices."""
+	if not values:
+		raise ValueError("sample_choice requires at least one value")
+	return np.random.default_rng().choice(values).item()
+
+
 def log10_kpc_to_arcsec(log10_kpc, redshift):
 	"""Convert a physical size in ``log10(kpc)`` to arcseconds."""
 	size_kpc, redshift = np.broadcast_arrays(10.0 ** np.asarray(log10_kpc, float), redshift)

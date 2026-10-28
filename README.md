@@ -1,6 +1,6 @@
-# Introduction
+# Lensing simulator website
 
-Glafic - Forward Lensing EXplorer (G-FLEX) is a browser-based front end for building and running gravitational lensing simulations with `glafic`, then producing a Euclid-like VIS I-band preview. It is designed for interactive exploration: you can assemble lens mass models and source light models, adjust parameters, preview the generated `glafic` input, and run the simulation to produce a noisy synthetic image.
+This project is a browser-based front end for building and running gravitational lensing simulations with `glafic`, then producing a Euclid-like VIS I-band preview. It is designed for interactive exploration: you can assemble lens mass models and source light models, adjust parameters, preview the generated `glafic` input, and run the simulation to produce a noisy synthetic image.
 
 The website does not replace the physics engine. It generates the input files, runs the simulation, and converts the resulting image products into a detector-like observational preview. Most of the scientific model logic still lives in the `glafic` pipeline and the Python rendering layer under `lensing_sim_website/`.
 
@@ -13,12 +13,15 @@ The website does not replace the physics engine. It generates the input files, r
 - Simulation execution through the bundled `glafic` binary
 - Synthetic I-band image generation with detector effects
 - Lens diagnostic products: critical curves, caustics, and radial profiles
+- Past-results gallery with side-by-side comparison and residual images
+- Single-run and CPU-parallel batch execution with live progress
+- Gaussian potential (`gaupot`) fields follow glafic's manual: `z_lens`, `z_source/fid`, `x`, `y`, `e_p`, `theta_e`, `sigma`, `kappa_0`
 
 ## Quick start
 
 Compile glafic on your system. For guidance, refer to the glafic2 github repository. Copy the compiled executable into lensing_sim_website/
 
-Then, from the project directory:
+From the project directory:
 
 ```powershell
 py -3 -m pip install -r requirements.txt
@@ -53,8 +56,6 @@ Supported source/light kinds include:
 
 Each component has parameter fields that match the `glafic` input conventions. Values may reference variables defined in the Functions tab using `$name`, and NumPy functions are available as `np`. All defined variables should be preceded by `$` (e.g. $lens_z). The default scaling laws can be accessed in the 'Functions' tab by clicking on them or writing out the full function name. Note that default functions have to be preceded by `!`. For more examples, load the example preset.
 
-The elliptical power-law lens parameters are ordered as `lens_z`, fiducial `source_z`, `x`, `y`, ellipticity, PA, Einstein radius, and power-law index.
-
 The app stores UI metadata separately from the input file. For example, `web_metadata.json` contains photometric information like luminosity, spectral template choice, and lens mass-to-light ratios; this metadata is not sent directly to `glafic`.
 
 ### 2. Preview the generated input
@@ -73,9 +74,40 @@ The generated input follows the usual `glafic` input file pattern:
 
 ### 3. Run the simulation
 
-When you run the simulation, the backend executes the `glafic` binary in the project run directory. The resulting image products are then read back and processed into a grayscale I-band preview.
+Choose Single run or Batch run beside the Run button. For Batch run, enter a batch name
+and the number of runs (between 1 and 10,000). Batch names may contain letters, numbers,
+spaces, hyphens, underscores, and periods, and must start with a letter or number.
+The backend creates one independent run directory per sample and executes the `glafic`
+jobs concurrently, bounded by the system CPU count. The Functions tab can define one
+sampled variable per assignment, for example:
 
-The latest image is shown in the main viewer, with the previous two images available below it. Older images in `runs/` are cleaned up as new ones are generated.
+```text
+$halo_mass = !parameters.sample_normal(12.0, 0.15)
+$x_offset = !parameters.sample_uniform(-0.5, 0.5)
+```
+
+The distribution helpers include `sample_normal`, `sample_uniform`, `sample_lognormal`,
+`sample_exponential`, and `sample_choice`. Each batch sample is resolved independently,
+and later arithmetic expressions can reference sampled variables. The UI displays the
+latest completed image, recent image history, progress, and diagnostic status while the
+batch is running. Critical-curve and lens-information diagnostics are computed for each
+run after its image is rendered; the UI polls unfinished diagnostics and enables the
+critical-curve overlay when they are ready.
+
+When the batch finishes, results are stored under
+`runs/batch/<batch-name>/<run-name>/`. Each run directory contains its own resolved
+`run.input`, `header.json`, raw glafic products, physical-flux FITS products, image
+preview, and diagnostics. A failed batch reports the backend error in the output panel;
+completed runs remain available in the batch directory.
+
+When you run the simulation, the backend executes the `glafic` binary in the project run
+directory. The resulting image products are then read back and processed into a
+grayscale I-band preview.
+
+The latest image is shown in the main viewer, with a short recent history available below it.
+The `Past results` tab lists up to 50 completed results retained in `runs/`. Select any
+two results with matching image dimensions to view both images side by side and inspect
+a signed residual image (result A minus result B).
 
 ### 4. Produce the I-band observational preview
 
@@ -89,7 +121,13 @@ The final rendered preview is not a raw `glafic` output. It is a Python post-pro
 - adds sky background, Poisson noise, and read noise
 - crops to the requested view and normalizes for display
 
-The final display output is stored as `ie_band.png`, and the underlying normalized data are saved in `ie_band_data.json`. In the web app, you can adjust the stretching of the image to potentially reveal more details by clicking the fullscreen button and adjusting the asinh stretch bar. Once the critical curves are computed, you can also access the critical curves in the image, and the other lens information (e.g. caustics, convergence, magnification) in the `Lens Info` tab.
+The final display output is stored as `ie_band.png`, and the underlying normalized data
+are saved in `ie_band_data.json`. The same linear detector values are also written to
+`ie_band_linear.fits` without the display asinh stretch. In the web app, you can adjust
+the display stretch by clicking the fullscreen button and adjusting the asinh stretch
+bar. Once the critical curves are computed, you can access the critical curves in the
+image and the other lens information (for example caustics, convergence, and
+magnification) in the `Lens Info` tab.
 
 ## Typical workflow
 
@@ -99,7 +137,8 @@ The final display output is stored as `ie_band.png`, and the underlying normaliz
 4. Use Preview input to inspect the generated `run.input`.
 5. Run the simulation to generate the image products.
 6. Inspect the I-band preview and lens diagnostics.
-7. Save and reload presets using the Presets tab.
+7. Open Past results to compare two completed simulations and inspect their residual.
+8. Save and reload presets using the Presets tab.
 
 ## Output and file layout
 
@@ -108,7 +147,6 @@ The project uses a few important folders and files:
 - `server.py` — HTTP server and request handling
 - `core/` — parsing and simulation setup helpers
 - `static/` — frontend assets
-- `filters/` — Euclid VIS throughput curve used for photometry and spectrum plots
 - `templates/` — spectral templates used for photometry
 - `presets/` — saved user presets
 - `runs/` — per-run output directories
@@ -119,7 +157,18 @@ Each run directory usually contains files such as:
 - `image.fits` / `source.fits` — emitted simulation maps
 - `ie_band.png` — grayscale I-band preview
 - `ie_band_data.json` — normalized detector-plane values used for display
-- lens diagnostic files and plots
+- `ie_band_linear.fits` — linear normalized detector-plane values without display stretch
+- `header.json` — resolved configuration, variables, lenses, and sources for this run
+- `lens_image.fits` — unstretched physical-flux lensed image plus source-light FITS product
+- `lensed_image_only.fits` — unstretched physical-flux lensed image component without source light
+- `lensing_galaxy_light.fits` — unstretched physical-flux source-light FITS product
+- `web_curves.json` — critical curves, caustics, and lens-information diagnostics
+- `lens_info.png` — radial lens-information plot when diagnostics are complete
+
+The FITS values are scaled by `1e30` for numerical readability, with
+`BUNIT = 1e30 erg s-1 cm-2 pixel-1`. The lensed and unlensed source maps are
+normalized using the configured source luminosity and luminosity distance before
+being written; no display stretch, clipping, or normalization is applied.
 
 ## Appendix: technical details
 
@@ -172,9 +221,7 @@ Bright galaxy and AGN components use spectral templates from the included `templ
 - dusty_starburst
 - AGN (`j0647agn_torus.fits`)
 
-These are shifted by redshift and combined with the Euclid VIS throughput curve in `filters/Euclid_VIS.vis.dat` for the filter-integrated photon gain used in the detector model and for the spectrum plot.
-
-The filter file is shipped with this project, so users do not need the separate `forward_lensing_sim` repository to render images or plot spectra.
+These are shifted by redshift and convolved with the VIS throughput curve for the filter-integrated photon gain used in the detector model.
 
 ### Lens diagnostics
 

@@ -4,6 +4,11 @@ const componentsEl = $('#components');
 let latestImageData = null;
 let latestImageDataUrl = null;
 const FUNCTION_DEFAULT_ARGS = {
+  'parameters.sample_normal': '0, 1',
+  'parameters.sample_uniform': '0, 1',
+  'parameters.sample_lognormal': '0, 1',
+  'parameters.sample_exponential': '1',
+  'parameters.sample_choice': '0, 1',
   'parameters.log10': '1e12',
   'parameters.halo_concentration_mass': '1e12,0.3',
   'parameters.galaxy_effective_radius_mass': '0.3,10.5,"early"',
@@ -18,7 +23,7 @@ const LENS_PARAMETER_SPECS = {
   point: [[0,'z_lens'],[1,'M_total'],[2,'x'],[3,'y']],
   sie: [[0,'z_lens'],[1,'sigma'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'r_core']],
   jaffe: [[0,'z_lens'],[1,'sigma'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'r_trunc'],[7,'r_core']],
-  pow: [[0,'z_lens'],[1,'z_source (fiducial)'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'PA'],[6,'r_Ein'],[7,'power-law index']],
+  pow: [[0,'z_fid'],[1,'r_Ein'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'gamma']],
   powpot: [[0,'z_fid'],[1,'r_Ein'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'gamma']],
   sers: [[0,'z_lens'],[1,'M_total (Msun)'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'r_e'],[7,'n']],
   serspot: [[0,'z_lens'],[1,'M_total'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'r_e'],[7,'n']],
@@ -27,7 +32,7 @@ const LENS_PARAMETER_SPECS = {
   hernpot: [[0,'z_lens'],[1,'M_total'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'r_b']],
   nfw: [[0,'z_lens'],[1,'M_vir'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'c_vir']],
   anfw: [[0,'z_lens'],[1,'M_vir (Msun)'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'c_vir']],
-  gaupot: [[0,'z_lens'],[1,'kappa_0'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'sigma'],[7,'p8_fixed_0']],
+  gaupot: [[0,'z_lens'],[1,'z_source/fid'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'sigma'],[7,'kappa_0']],
   nfwpot: [[0,'z_lens'],[1,'M_vir'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'c_vir']],
   gnfw: [[0,'z_lens'],[1,'M_vir'],[2,'x'],[3,'y'],[4,'ellipticity'],[5,'theta'],[6,'c_minus_2'],[7,'alpha']],
   gnfwpot: [[0,'z_lens'],[1,'M_vir'],[2,'x'],[3,'y'],[4,'ellipticity_pot'],[5,'theta'],[6,'c_minus_2'],[7,'alpha']],
@@ -65,19 +70,29 @@ async function boot() {
   bindDropzone();
   $('#previewBtn').addEventListener('click', () => submit('/api/preview'));
   $('#runBtn').addEventListener('click', () => submit('/api/run'));
+  $('#runMode').addEventListener('change', (event) => {
+    const isBatch = event.target.value === 'batch';
+    $('#batchNameWrap').hidden = !isBatch;
+    $('#batchCountWrap').hidden = !isBatch;
+  });
   $('#functionEditor').addEventListener('input', syncFunctionEditor);
   $('#clearFunctionsBtn').addEventListener('click', () => { $('#functionEditor').value = ''; syncFunctionEditor(); });
   renderFunctionEditor();
 }
 function setupCanvasPages() {
   const canvas = $('.canvas');
-  canvas.insertAdjacentHTML('afterbegin', '<nav class="canvas-tabs" aria-label="Canvas views"><button class="canvas-tab active" data-canvas-page="editor" aria-selected="true">Components</button><button class="canvas-tab" data-canvas-page="functions" aria-selected="false">Functions</button><button class="canvas-tab" data-canvas-page="diagram" aria-selected="false">Lens info</button><button class="canvas-tab" data-canvas-page="presets" aria-selected="false">Presets</button></nav>');
+  canvas.insertAdjacentHTML('afterbegin', '<nav class="canvas-tabs" aria-label="Canvas views"><button class="canvas-tab active" data-canvas-page="editor" aria-selected="true">Components</button><button class="canvas-tab" data-canvas-page="functions" aria-selected="false">Functions</button><button class="canvas-tab" data-canvas-page="diagram" aria-selected="false">Lens info</button><button class="canvas-tab" data-canvas-page="presets" aria-selected="false">Presets</button><button class="canvas-tab" data-canvas-page="results" aria-selected="false">Past results</button></nav>');
   canvas.insertAdjacentHTML('beforeend', '<section id="componentDiagram" class="component-diagram" hidden aria-label="Lens position map"></section>');
   canvas.insertAdjacentHTML('beforeend', '<section id="lensProfiles" class="lens-profiles" hidden aria-label="Radial lens profiles"></section>');
   canvas.insertAdjacentHTML('beforeend', '<section id="presetPanel" class="preset-panel" hidden aria-label="Saved presets"><div class="preset-create"><label>Preset name<input id="presetName" type="text" placeholder="e.g. Compact group"></label><button id="savePresetBtn" class="button primary" type="button">Save input</button></div><div id="presetList" class="preset-list"></div></section>');
-  canvas.insertAdjacentHTML('beforeend', '<section id="functionPanel" class="function-panel" hidden aria-label="Function definitions"><div class="function-editor-head"><div><strong>Scaling laws and variables</strong><small>One assignment per line. Use standard arithmetic, built-ins, <code>np.*</code>, or <code>!parameters.*</code>.</small></div><button id="clearFunctionsBtn" class="button secondary" type="button">Clear</button></div><textarea id="functionEditor" class="function-editor" spellcheck="false" aria-label="Function and variable definitions" placeholder="# Example&#10;log_mass = 10.5&#10;mass = 10**log_mass&#10;size = np.exp(log_mass / 10)"></textarea><div id="functionLibrary" class="function-library"></div></section>');
+  canvas.insertAdjacentHTML('beforeend', '<section id="functionPanel" class="function-panel" hidden aria-label="Function definitions"><div class="function-editor-head"><div><strong>Scaling laws and variables</strong><small>Assignments use standard arithmetic, built-ins, <code>np.*</code>, or <code>!parameters.*</code>. Batch distributions can use <code>!parameters.sample_normal(mean, sigma)</code>, <code>sample_uniform(low, high)</code>, or the other sampling helpers below.</small></div><button id="clearFunctionsBtn" class="button secondary" type="button">Clear</button></div><textarea id="functionEditor" class="function-editor" spellcheck="false" aria-label="Function and variable definitions" placeholder="# Example&#10;mass = !parameters.sample_normal(1e12, 1e11)&#10;position = !parameters.sample_uniform(-1, 1)"></textarea><div id="functionLibrary" class="function-library"></div></section>');
+  canvas.insertAdjacentHTML('beforeend', '<section id="resultsPanel" class="results-panel" hidden aria-label="Past simulation results"><div class="results-head"><div><strong>Compare past results</strong><small>Choose two results with matching dimensions to inspect their residual.</small></div><button id="refreshResultsBtn" class="button secondary" type="button">Refresh</button></div><div class="comparison-controls"><label>Result A<select id="resultA"></select></label><label>Result B<select id="resultB"></select></label><button id="compareBtn" class="button primary" type="button">Compare</button></div><div id="pastResultsList" class="past-results-list"></div><div id="comparisonPanel" class="comparison-panel" hidden></div></section>');
   renderPresets();
   $('#savePresetBtn').addEventListener('click', () => savePreset().catch((error) => { $('#output').textContent = error.message; $('#statusText').textContent = 'Needs attention'; }));
+  $('#refreshResultsBtn').addEventListener('click', () => loadPastResults().catch((error) => {
+    $('#pastResultsList').innerHTML = `<div class="comparison-error">${escapeHtml(error.message)}</div>`;
+  }));
+  $('#compareBtn').addEventListener('click', compareResults);
   canvas.querySelectorAll('[data-canvas-page]').forEach((button) => button.addEventListener('click', () => setCanvasPage(button.dataset.canvasPage)));
 }
 function setCanvasPage(page) {
@@ -87,6 +102,7 @@ function setCanvasPage(page) {
   const diagramVisible = page === 'diagram';
   const presetsVisible = page === 'presets';
   const functionsVisible = page === 'functions';
+  const resultsVisible = page === 'results';
   const pageHead = $('#canvasPageHead');
   $('#dropzone').hidden = !editorVisible;
   $('.canvas-actions').hidden = !editorVisible;
@@ -97,9 +113,13 @@ function setCanvasPage(page) {
   profiles.hidden = !diagramVisible;
   $('#presetPanel').hidden = !presetsVisible;
   $('#functionPanel').hidden = !functionsVisible;
+  $('#resultsPanel').hidden = !resultsVisible;
   if (functionsVisible) renderFunctionEditor();
   document.querySelectorAll('[data-canvas-page]').forEach((button) => { const active = button.dataset.canvasPage === page; button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active)); });
   if (page === 'diagram') { renderDiagram(); renderLensInfo(); }
+  if (resultsVisible) loadPastResults().catch((error) => {
+    $('#pastResultsList').innerHTML = `<div class="comparison-error">${escapeHtml(error.message)}</div>`;
+  });
 }
 function legacyFunctionDefinitions(functions) { return (functions || []).map((item, index) => `$fn_${index + 1} = !${item.id}(${item.args || ''})`).join('\n'); }
 function presetFunctionText(data) { const text = String(data.functionDefinitions ?? data.functionText ?? '').trim(); const legacy = legacyFunctionDefinitions(data.functions).trim(); if (!text) return legacy || (data.variables || []).map((item) => `${item.name} = ${item.value}`).join('\n'); if (!legacy) return text; return `${text}\n${legacy}`; }
@@ -198,9 +218,9 @@ function defaultParameters(category, kind) {
   if (category === 'lens') {
     if (kind === 'point') return ['0.3','1e11','0','0'];
     if (kind === 'sie') return ['0.3','200','0','0','0.2','0','0.01','0'];
-    if (kind === 'pow') return ['0.3','1','0','0','0.2','0','1','2'];
+    if (kind === 'pow') return ['0.3','1','0','0','0.2','0','2','0'];
     if (kind === 'sers') return ['0.3','1e11','0','0','0.2','0','0.5','4'];
-    if (kind === 'gaupot') return ['0.3','0.05','0','0','0.2','0','0.5','0'];
+    if (kind === 'gaupot') return ['0.3','1.0','0','0','0.2','0','0.5','0.05'];
     return ['0.3','1e11','0','0','0.2','0','1','0'];
   }
   return kind === 'point' ? ['1.0','0','0','0','0','0','0','0'] : ['1.0','1','0','0','0.1','0','0.2','1'];
@@ -309,12 +329,96 @@ function variableMarkup(item, index) { return `<article class="component dynamic
 function functionMarkup(item, index) { const definition = state.catalog.functions.find((entry) => entry.id === item.id); const defaults = item.args || functionArguments(item.id); const argumentHelp = definition.args.map((argument, argumentIndex) => `${argument}: ${definition.argHelp[argumentIndex]}`).join(' · '); const galaxyType = item.id === 'parameters.galaxy_effective_radius_mass' ? `<label>Galaxy type<select data-function-option data-function-index="${index}"><option value="early" ${defaults.includes('"late"') ? '' : 'selected'}>Early-type</option><option value="late" ${defaults.includes('"late"') ? 'selected' : ''}>Late-type</option></select></label>` : ''; item.args = defaults; return `<article class="component dynamic-item function-card" draggable="true" data-index="${index}"><div class="component-top"><span class="drag-handle">⠿</span><div class="component-title"><span class="component-type">function → $fn_${index + 1}</span><strong>${definition.label}</strong></div><small>${definition.help}</small></div><label>Arguments<input data-bind="function:${index}:args" value="${defaults}"></label>${galaxyType}<small class="function-help">${argumentHelp}</small></article>`; }
 function currentComponents() { return [...componentsEl.querySelectorAll('.component:not(.dynamic-item)')].map((card) => { const sourceIndex = Number(card.dataset.index); const source = state.components[sourceIndex]; const item = {...source, parameters:[...source.parameters]}; item.label = card.querySelector('.component-label').value; card.querySelectorAll('[data-parameter]').forEach((input) => { item.parameters[Number(input.dataset.parameter)] = input.value; }); const physicalInput = card.querySelector('[data-physical]'); if (physicalInput) item[physicalInput.dataset.physical] = physicalInput.value; const templateInput = card.querySelector('[data-template]'); if (templateInput) item.template = templateInput.value; return item; }); }
 function syncComponentsFromDom() { if (!state.components.length || !componentsEl.querySelector('.component:not(.dynamic-item)')) return; state.components = currentComponents(); }
-function payload() { syncComponentsFromDom(); syncFunctionEditor(); const components = state.components; return { config: Object.fromEntries([...document.querySelectorAll('[data-config]')].map((input) => [input.dataset.config, input.value])), lenses: components.filter((item) => item.category === 'lens'), sources: components.filter((item) => item.category === 'source'), variables: state.variables, functions: state.functions }; }
+function payload() { syncComponentsFromDom(); syncFunctionEditor(); const components = state.components; const runMode = $('#runMode')?.value || 'single'; return { config: Object.fromEntries([...document.querySelectorAll('[data-config]')].map((input) => [input.dataset.config, input.value])), lenses: components.filter((item) => item.category === 'lens'), sources: components.filter((item) => item.category === 'source'), variables: state.variables, functions: state.functions, functionText: state.functionText, runMode, batchName: String($('#batchName')?.value || '').trim(), batchCount: Number($('#batchCount')?.value || 1) }; }
 async function renderImages(images) { const latestBox = $('#latestImageBox'); const latestImage = $('#latestImage'); const history = $('#imageHistory'); history.innerHTML = ''; latestImageData = null; latestImageDataUrl = null; if (!images.length) { latestBox.hidden = true; return; } latestBox.hidden = false; latestImage.src = `${images[0].image}?t=${Date.now()}`; latestImageDataUrl = images[0].data || null; if (latestImageDataUrl) latestImageData = await fetch(`${latestImageDataUrl}?t=${Date.now()}`, {cache:'no-store'}).then((response) => response.json()); for (const [index, entry] of images.slice(1, 3).entries()) { const figure = document.createElement('figure'); const image = document.createElement('img'); image.src = `${entry.image}?t=${Date.now()}-${index}`; image.alt = `${index + 1} previous noisy I-band simulation`; const caption = document.createElement('figcaption'); caption.textContent = `${index + 1} previous`; figure.append(image, caption); history.append(figure); } }
 function drawFullscreen() { if (!latestImageData) return; const canvas = $('#fullscreenCanvas'); const q = 10 ** Number($('#stretchSlider').value); $('#stretchValue').value = q; $('#stretchValue').textContent = q >= 100 ? q.toPrecision(4) : q.toFixed(2); canvas.width = latestImageData.width; canvas.height = latestImageData.height; const context = canvas.getContext('2d'); context.imageSmoothingEnabled = false; const pixels = context.createImageData(canvas.width, canvas.height); const denominator = Math.asinh(q); latestImageData.values.flat().forEach((value, index) => { const stretched = Math.max(0, Math.min(1, Math.asinh(Math.max(0, value) * q) / denominator)); const channel = Math.round(stretched * 255); const offset = index * 4; pixels.data[offset] = channel; pixels.data[offset + 1] = channel; pixels.data[offset + 2] = channel; pixels.data[offset + 3] = 255; }); context.putImageData(pixels, 0, 0); }
+async function loadPastResults() {
+  const response = await fetch('/api/results', {cache:'no-store'});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Failed to load past results');
+  const results = result.results || [];
+  const options = results.map((entry) => `<option value="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</option>`).join('');
+  $('#resultA').innerHTML = options;
+  $('#resultB').innerHTML = options;
+  if (results.length > 1) $('#resultB').selectedIndex = 1;
+  $('#compareBtn').disabled = results.length < 2;
+  $('#pastResultsList').innerHTML = results.length ? results.map((entry) => `<figure class="past-result"><img src="${entry.image}?t=${entry.created}" alt="Past result ${escapeHtml(entry.name)}"><figcaption>${escapeHtml(entry.name)}</figcaption></figure>`).join('') : '<div class="preset-empty">No completed simulations yet.</div>';
+}
+async function compareResults() {
+  const resultA = $('#resultA').value;
+  const resultB = $('#resultB').value;
+  const comparisonPanel = $('#comparisonPanel');
+  if (!resultA || !resultB || resultA === resultB) {
+    comparisonPanel.hidden = false;
+    comparisonPanel.innerHTML = '<div class="comparison-error">Choose two different past results.</div>';
+    return;
+  }
+  comparisonPanel.hidden = false;
+  comparisonPanel.innerHTML = '<div class="comparison-loading">Building comparison...</div>';
+  try {
+    const response = await fetch('/api/compare', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({resultA, resultB})});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Comparison failed');
+    const comparison = result.comparison;
+    comparisonPanel.innerHTML = `<div class="comparison-grid"><figure><img src="${comparison.image}?t=${Date.now()}" alt="${escapeHtml(resultA)}"><figcaption>${escapeHtml(resultA)}</figcaption></figure><figure><img src="${comparison.imageB}?t=${Date.now()}" alt="${escapeHtml(resultB)}"><figcaption>${escapeHtml(resultB)}</figcaption></figure><figure><img src="${comparison.residual}?t=${Date.now()}" alt="Residual image"><figcaption>Residual (A − B)</figcaption></figure></div><small class="comparison-stat">Maximum absolute residual: ${Number(comparison.maxAbsoluteResidual).toPrecision(5)}</small>`;
+  } catch (error) {
+    comparisonPanel.innerHTML = `<div class="comparison-error">${escapeHtml(error.message)}</div>`;
+  }
+}
 async function plotSpectrum(template) { const dialog = $('#spectrumDialog'); const title = state.catalog.spectralTemplates.find((item) => item.id === template)?.label || template; $('#spectrumTitle').textContent = title; const result = await fetch(`/api/spectrum/${encodeURIComponent(template)}`).then((response) => response.json()); const canvas = $('#spectrumCanvas'); const context = canvas.getContext('2d'); context.clearRect(0, 0, canvas.width, canvas.height); const padding = {top:20,right:22,bottom:62,left:68}; const points = result.wavelengths.map((wavelength, index) => [wavelength, result.fluxes[index]]).filter(([wavelength, flux]) => wavelength > 0 && flux > 0 && Number.isFinite(wavelength) && Number.isFinite(flux)); const wavelengths = points.map(([wavelength]) => wavelength); const fluxes = points.map(([, flux]) => flux); const minWavelength = Math.min(...wavelengths); const maxWavelength = Math.max(...wavelengths); const minFlux = Math.min(...fluxes); const maxFlux = Math.max(...fluxes); const logMinWavelength = Math.log10(minWavelength); const logMaxWavelength = Math.log10(maxWavelength); const logMinFlux = Math.log10(minFlux); const logMaxFlux = Math.log10(maxFlux); const plotWidth = canvas.width - padding.left - padding.right; const plotHeight = canvas.height - padding.top - padding.bottom; const xPosition = (value) => padding.left + (Math.log10(value) - logMinWavelength) / (logMaxWavelength - logMinWavelength) * plotWidth; const yPosition = (value) => padding.top + (logMaxFlux - Math.log10(value)) / (logMaxFlux - logMinFlux) * plotHeight; context.font = "11px 'DM Mono', monospace"; context.textAlign = 'center'; context.textBaseline = 'top'; for (let tick = Math.ceil(logMinWavelength); tick <= Math.floor(logMaxWavelength); tick += 1) { const x = xPosition(10 ** tick); context.strokeStyle = '#31483b'; context.lineWidth = 1; context.beginPath(); context.moveTo(x, padding.top); context.lineTo(x, canvas.height - padding.bottom); context.stroke(); context.fillStyle = '#9fb3a7'; context.fillText(`1e${tick}`, x, canvas.height - padding.bottom + 9); } context.textAlign = 'right'; context.textBaseline = 'middle'; for (let tick = Math.ceil(logMinFlux); tick <= Math.floor(logMaxFlux); tick += 1) { const y = yPosition(10 ** tick); context.strokeStyle = '#31483b'; context.beginPath(); context.moveTo(padding.left, y); context.lineTo(canvas.width - padding.right, y); context.stroke(); context.fillStyle = '#9fb3a7'; context.fillText(`1e${tick}`, padding.left - 8, y); } context.strokeStyle = '#71857a'; context.beginPath(); context.moveTo(padding.left, padding.top); context.lineTo(padding.left, canvas.height - padding.bottom); context.lineTo(canvas.width - padding.right, canvas.height - padding.bottom); context.stroke(); context.strokeStyle = '#ffb84d'; context.lineWidth = 2.5; context.lineJoin = 'round'; context.beginPath(); points.forEach(([wavelength, flux], index) => { const x = xPosition(wavelength); const y = yPosition(flux); if (index === 0) context.moveTo(x, y); else context.lineTo(x, y); }); context.stroke(); context.fillStyle = '#d6ebdc'; context.textAlign = 'center'; context.textBaseline = 'bottom'; context.font = "12px 'DM Mono', monospace"; context.fillText('Wavelength (Angstrom, log scale)', padding.left + plotWidth / 2, canvas.height - 8); context.save(); context.translate(15, padding.top + plotHeight / 2); context.rotate(-Math.PI / 2); context.fillText('Flux density (arbitrary units, log scale)', 0, 0); context.restore(); dialog.showModal(); }
 function bindImageViewer() { const overlay = $('#fullscreenOverlay'); $('#fullscreenBtn').addEventListener('click', async () => { if (!latestImageData && latestImageDataUrl) latestImageData = await fetch(`${latestImageDataUrl}?t=${Date.now()}`, {cache:'no-store'}).then((response) => response.json()); overlay.hidden = false; drawFullscreen(); }); $('#stretchSlider').addEventListener('input', drawFullscreen); $('#closeFullscreenBtn').addEventListener('click', () => { overlay.hidden = true; }); overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.hidden = true; }); $('#closeSpectrumBtn').addEventListener('click', () => $('#spectrumDialog').close()); }
-async function submit(endpoint) { const output = $('#output'); const status = $('#statusText'); status.textContent = endpoint.endsWith('run') ? 'Running' : 'Checking'; output.textContent = 'Working...'; try { const response = await fetch(endpoint, {method:'POST', cache:'no-store', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload())}); const result = await response.json(); if (!response.ok) throw new Error(result.error); output.textContent = endpoint.endsWith('preview') ? `${result.runs} run(s)\n\n${result.input}` : `${result.results.length} run(s) completed\n\n${result.results.map((run) => `${run.name}  ${run.output}`).join('\n')}`; renderImages(result.images || []); status.textContent = endpoint.endsWith('run') ? 'Complete' : 'Ready'; } catch (error) { output.textContent = error.message; status.textContent = 'Needs attention'; } }
+async function submit(endpoint) {
+  const output = $('#output');
+  const status = $('#statusText');
+  const progress = $('#runProgress');
+  const running = endpoint.endsWith('run');
+  status.textContent = running ? 'Running' : 'Checking';
+  progress.hidden = !running;
+  progress.value = 0;
+  output.textContent = 'Working...';
+  try {
+    const response = await fetch(endpoint, {method:'POST', cache:'no-store', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload())});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+    if (!running) {
+      output.textContent = `${result.runs} run(s)\n\n${result.input}`;
+      status.textContent = 'Ready';
+      return;
+    }
+    await pollRunJob(result.jobId, output, status);
+  } catch (error) {
+    output.textContent = error.message;
+    status.textContent = 'Needs attention';
+  }
+}
+async function pollRunJob(jobId, output, status) {
+  const progress = $('#runProgress');
+  for (;;) {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`, {cache:'no-store'});
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || 'Run job was not found');
+    if (job.images?.length) {
+      await renderImages(job.images);
+      output.textContent = `${job.completed}/${job.total} run(s) complete\n${job.phase}`;
+    } else {
+      output.textContent = job.phase || 'Starting...';
+    }
+    progress.max = job.total || 1;
+    progress.value = job.completed || 0;
+    if (job.status === 'complete') {
+      output.textContent = `${job.completed} run(s) completed\n\n${job.phase}`;
+      status.textContent = `Complete · ${job.phase}`;
+      progress.value = progress.max;
+      progress.hidden = true;
+      return;
+    }
+    if (job.status === 'error') {
+      progress.hidden = true;
+      throw new Error(job.error || 'Run failed');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
 async function plotSpectrumWithFilter(template, redshift = 0) {
   const dialog = $('#spectrumDialog');
   const title = state.catalog.spectralTemplates.find((item) => item.id === template)?.label || template;

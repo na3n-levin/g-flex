@@ -29,6 +29,7 @@ READ_NOISE_ELECTRONS = 4.4
 SKY_ABMAG_PER_ARCSEC2 = 21.0
 DETECTOR_PIXEL_ARCSEC = 0.1
 SIMULATION_BOUNDS = (-5.0, 5.0, -5.0, 5.0)
+FITS_FLUX_SCALE = 1.0e30
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_FILES = {
     "elliptical": TEMPLATE_DIR / "CWW_E_ext.sed",
@@ -191,6 +192,32 @@ def _source_flux_map(image_map: np.ndarray, source_map: np.ndarray, luminosity: 
     return np.clip(image_map, 0.0, None) / total_weight * total_flux
 
 
+def _write_physical_fits(
+    run_dir: Path,
+    lensed_image: np.ndarray,
+    source_light: np.ndarray,
+) -> None:
+    if lensed_image.shape != source_light.shape:
+        raise ValueError(
+            f"Cannot combine physical FITS maps with different shapes: "
+            f"{lensed_image.shape} and {source_light.shape}"
+        )
+    header = fits.Header()
+    header["BUNIT"] = "1e30 erg s-1 cm-2 pixel-1"
+    header["BTYPE"] = "physical flux"
+    scaled_lensed_image = np.asarray(lensed_image, dtype=float) * FITS_FLUX_SCALE
+    scaled_source_light = np.asarray(source_light, dtype=float) * FITS_FLUX_SCALE
+    fits.PrimaryHDU(data=scaled_lensed_image, header=header).writeto(
+        run_dir / "lensed_image_only.fits", overwrite=True
+    )
+    fits.PrimaryHDU(data=scaled_source_light, header=header).writeto(
+        run_dir / "lensing_galaxy_light.fits", overwrite=True
+    )
+    fits.PrimaryHDU(data=scaled_lensed_image + scaled_source_light, header=header).writeto(
+        run_dir / "lens_image.fits", overwrite=True
+    )
+
+
 def _lens_flux_components(run, shape: tuple[int, int], pixel_size: float, metadata: dict) -> list[tuple[np.ndarray, str, float]]:
     components: list[tuple[np.ndarray, str, float]] = []
     x_coords = (np.arange(shape[1]) - (shape[1] - 1) / 2.0) * pixel_size
@@ -238,6 +265,8 @@ def render_i_band(run_dir: str | Path, seed: int = 42, metadata: dict | None = N
     image_maps = _component_maps(_resolve(run_dir, "image"))
     source_maps = _component_maps(_resolve(run_dir, "source"))
     flux_components: list[tuple[np.ndarray, str, float]] = []
+    physical_lensed_image = np.zeros_like(image_maps[0], dtype=float)
+    physical_source_light = np.zeros_like(source_maps[0], dtype=float)
     source_metadata = metadata.get("sources", [])
     extended_index = 0
     for source_index, source in enumerate(run.sources):
@@ -255,8 +284,13 @@ def render_i_band(run_dir: str | Path, seed: int = 42, metadata: dict | None = N
         template = str(source_metadata[source_index]["template"])
         if template not in SUPPORTED_TEMPLATES:
             raise ValueError(f"Unsupported spectral template '{template}' for source component {source_index + 1}")
-        flux_components.append((_source_flux_map(image_map, source_map, luminosity, float(source.redshift)), template, float(source.redshift)))
+        lensed_flux_map = _source_flux_map(image_map, source_map, luminosity, float(source.redshift))
+        source_flux_map = _source_flux_map(source_map, source_map, luminosity, float(source.redshift))
+        physical_lensed_image += lensed_flux_map
+        physical_source_light += source_flux_map
+        flux_components.append((lensed_flux_map, template, float(source.redshift)))
         extended_index += 1
+    _write_physical_fits(run_dir, physical_lensed_image, physical_source_light)
     pixel_size = float(run.cfg.get("pix_ext", 0.02))
     shape = image_maps[0].shape
     flux_components.extend(_lens_flux_components(run, shape, pixel_size, metadata))
@@ -304,4 +338,13 @@ def render_i_band(run_dir: str | Path, seed: int = 42, metadata: dict | None = N
     if data_path.exists():
         data_path.unlink()
     data_path.write_text(json.dumps({"width": width, "height": height, "values": normalized_values.tolist()}), encoding="utf-8")
+    linear_fits_path = run_dir / "ie_band_linear.fits"
+    linear_header = fits.Header()
+    linear_header["BTYPE"] = "linear normalized detector signal"
+    linear_header["BUNIT"] = "normalized signal"
+    linear_header["SOURCE"] = data_path.name
+    linear_header["COMMENT"] = "Linear detector signal; no display stretch applied."
+    fits.PrimaryHDU(data=np.asarray(normalized_values, dtype=np.float32), header=linear_header).writeto(
+        linear_fits_path, overwrite=True
+    )
     return output
