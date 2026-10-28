@@ -2,7 +2,7 @@
 
 This project is a browser-based front end for building and running gravitational lensing simulations with `glafic`, then producing a Euclid-like VIS I-band preview. It is designed for interactive exploration: you can assemble lens mass models and source light models, adjust parameters, preview the generated `glafic` input, and run the simulation to produce a noisy synthetic image.
 
-The website does not replace the physics engine. It generates the input files, runs the simulation, and converts the resulting image products into a detector-like observational preview. Most of the scientific model logic still lives in the `glafic` pipeline and the Python rendering layer under `lensing_sim_website/`.
+The website does not replace the physics engine. It generates the input files, runs the simulation, and converts the resulting image products into a detector-like observational preview. Most of the scientific model logic still lives in the `glafic` pipeline and the Python rendering layer under `gflex/`.
 
 ## Features
 
@@ -19,13 +19,13 @@ The website does not replace the physics engine. It generates the input files, r
 
 ## Quick start
 
-Compile glafic on your system. For guidance, refer to the glafic2 github repository. Copy the compiled executable into lensing_sim_website/
+Compile glafic on your system. For guidance, refer to the glafic2 github repository. Copy the compiled executable into gflex/
 
 From the project directory:
 
 ```powershell
-py -3 -m pip install -r requirements.txt
-py -3 server.py
+pip install -r requirements.txt
+python server.py
 ```
 
 Then open:
