@@ -108,7 +108,7 @@ function setCanvasPage(page) {
   $('.canvas-actions').hidden = !editorVisible;
   pageHead.hidden = !editorVisible && !diagramVisible;
   pageHead.querySelector('span').textContent = diagramVisible ? 'Lens information' : 'Model canvas';
-  pageHead.querySelector('small').textContent = diagramVisible ? 'diagnostics and radial profiles' : 'reorder components by dragging';
+  pageHead.querySelector('small').textContent = '';
   diagram.hidden = !diagramVisible;
   profiles.hidden = !diagramVisible;
   $('#presetPanel').hidden = !presetsVisible;
@@ -137,16 +137,18 @@ function renderDiagram() {
   const margin = {left:58, right:24, top:24, bottom:48};
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-  const xPosition = (value) => margin.left + (Number(value) + 2) / 4 * plotWidth;
-  const yPosition = (value) => margin.top + (2 - Number(value)) / 4 * plotHeight;
+  const bounds = state.view || {xmin:-5, xmax:5, ymin:-5, ymax:5};
+  const xPosition = (value) => margin.left + (Number(value) - bounds.xmin) / (bounds.xmax - bounds.xmin) * plotWidth;
+  const yPosition = (value) => margin.top + (bounds.ymax - Number(value)) / (bounds.ymax - bounds.ymin) * plotHeight;
   const colors = {lens:'#111', source:'#d52b2b'};
-  const ticks = [-2, -1, 0, 1, 2];
-  const grid = ticks.map((tick) => `<line class="diagram-grid" x1="${xPosition(tick)}" y1="${margin.top}" x2="${xPosition(tick)}" y2="${height - margin.bottom}"/><line class="diagram-grid" x1="${margin.left}" y1="${yPosition(tick)}" x2="${width - margin.right}" y2="${yPosition(tick)}"/>`).join('');
-  const labels = ticks.map((tick) => `<text class="diagram-label" x="${xPosition(tick)}" y="${height - margin.bottom + 20}" text-anchor="middle">${tick}</text><text class="diagram-label" x="${margin.left - 10}" y="${yPosition(tick) + 4}" text-anchor="end">${tick}</text>`).join('');
+  const ticks = [bounds.xmin, (bounds.xmin + bounds.xmax) / 2, bounds.xmax];
+  const yTicks = [bounds.ymin, (bounds.ymin + bounds.ymax) / 2, bounds.ymax];
+  const grid = ticks.map((tick) => `<line class="diagram-grid" x1="${xPosition(tick)}" y1="${margin.top}" x2="${xPosition(tick)}" y2="${height - margin.bottom}"/>`).join('') + yTicks.map((tick) => `<line class="diagram-grid" x1="${margin.left}" y1="${yPosition(tick)}" x2="${width - margin.right}" y2="${yPosition(tick)}"/>`).join('');
+  const labels = ticks.map((tick) => `<text class="diagram-label" x="${xPosition(tick)}" y="${height - margin.bottom + 20}" text-anchor="middle">${tick}</text>`).join('') + yTicks.map((tick) => `<text class="diagram-label" x="${margin.left - 10}" y="${yPosition(tick) + 4}" text-anchor="end">${tick}</text>`).join('');
   const points = state.components.map((item) => { const [xIndex, yIndex] = item.category === 'source' && item.kind === 'point' ? [1, 2] : [2, 3]; const x = Number(item.parameters[xIndex]); const y = Number(item.parameters[yIndex]); if (!Number.isFinite(x) || !Number.isFinite(y)) return ''; const cx = xPosition(x); const cy = yPosition(y); const color = colors[item.category]; return `<g class="diagram-point" style="stroke:${color}" aria-label="${item.category} center"><line x1="${cx - 5}" y1="${cy}" x2="${cx + 5}" y2="${cy}"/><line x1="${cx}" y1="${cy - 5}" x2="${cx}" y2="${cy + 5}"/></g>`; }).join('');
   const caustics = curveMarkup(state.curves.caustic, xPosition, yPosition);
   const empty = state.components.length ? '' : '<div class="diagram-empty">Add components to see their positions here.</div>';
-  diagram.innerHTML = `${empty}<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Component positions from minus two to two arcseconds"><rect x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${plotHeight}" fill="#fbfcf8"/>${grid}<line class="diagram-axis" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"/><line class="diagram-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"/>${labels}${caustics}${points}<text class="diagram-label" x="${margin.left + plotWidth / 2}" y="${height - 8}" text-anchor="middle">x (arcsec)</text><text class="diagram-label" transform="translate(15 ${margin.top + plotHeight / 2}) rotate(-90)" text-anchor="middle">y (arcsec)</text></svg><div class="diagram-legend"><span><i class="diagram-swatch" style="background:${colors.lens}"></i>lens center</span><span><i class="diagram-swatch" style="background:${colors.source}"></i>source center</span>${state.curves.caustic.length ? '<span><i class="diagram-swatch" style="background:#f1d447"></i>caustic</span>' : ''}</div>`;
+  diagram.innerHTML = `${empty}<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Component positions"><rect x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${plotHeight}" fill="#fbfcf8"/>${grid}<line class="diagram-axis" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"/><line class="diagram-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"/>${labels}${caustics}${points}<text class="diagram-label" x="${margin.left + plotWidth / 2}" y="${height - 8}" text-anchor="middle">x (arcsec)</text><text class="diagram-label" transform="translate(15 ${margin.top + plotHeight / 2}) rotate(-90)" text-anchor="middle">y (arcsec)</text></svg><div class="diagram-legend"><span><i class="diagram-swatch" style="background:${colors.lens}"></i>lens center</span><span><i class="diagram-swatch" style="background:${colors.source}"></i>source center</span>${state.curves.caustic.length ? '<span><i class="diagram-swatch" style="background:#f1d447"></i>caustic (source plane)</span>' : ''}</div>`;
 }
 function renderLensInfo() {
   const panel = $('#lensProfiles');
@@ -155,8 +157,8 @@ function renderLensInfo() {
   const pending = state.lensInfoPending;
   const status = pending ? '<div id="lensInfoStatus" class="lens-info-status">Lens maps are still running...</div>' : state.lensInfoError ? `<div id="lensInfoStatus" class="lens-info-status">${escapeHtml(state.lensInfoError)}</div>` : '';
   const empty = !lensInfo.r?.length && !pending ? '<div class="lens-info-empty">Run a simulation to calculate lens information.</div>' : '';
-  const image = state.lensInfoImage ? `<img class="lens-info-image" src="${state.lensInfoImage}?t=${Date.now()}" alt="Radial convergence and magnification profiles">` : '';
-  panel.innerHTML = `${status}${empty}${image}<div class="diagram-legend"><span>Generated with writelens · coordinate along caustic major axis in arcsec · absolute magnification uses a logarithmic scale</span></div>`;
+  const image = state.lensInfoImage ? `<img class="lens-info-image" src="${state.lensInfoImage}?t=${Date.now()}" alt="Two-dimensional deflection, convergence, shear, and radial magnification maps">` : '';
+  panel.innerHTML = `${status}${empty}${image}`;
 }
 function renderPalette() {
   const addPalette = (target, items, category) => {
@@ -406,8 +408,8 @@ async function pollRunJob(jobId, output, status) {
     progress.max = job.total || 1;
     progress.value = job.completed || 0;
     if (job.status === 'complete') {
-      output.textContent = `${job.completed} run(s) completed\n\n${job.phase}`;
-      status.textContent = `Complete · ${job.phase}`;
+      output.textContent = `${job.completed} run(s) completed`;
+      status.textContent = 'Complete';
       progress.value = progress.max;
       progress.hidden = true;
       return;

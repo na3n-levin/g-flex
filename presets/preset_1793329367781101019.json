@@ -1,0 +1,191 @@
+{
+  "name": "group",
+  "data": {
+    "config": {
+      "omega": "0.315",
+      "lambda": "0.685",
+      "weos": "-1.03",
+      "hubble": "0.674",
+      "pix_ext": "0.02",
+      "pix_poi": "0.02",
+      "xmin": "-5",
+      "xmax": "5",
+      "ymin": "-5",
+      "ymax": "5"
+    },
+    "components": [
+      {
+        "uid": "component_1",
+        "category": "lens",
+        "kind": "anfw",
+        "label": "anfw_1",
+        "parameters": [
+          "$z_lens",
+          "$m_halo",
+          "0",
+          "0",
+          "0.2",
+          "15",
+          "$c_halo",
+          "0"
+        ]
+      },
+      {
+        "uid": "component_2",
+        "category": "lens",
+        "kind": "sers",
+        "label": "sers_2",
+        "parameters": [
+          "$z_lens",
+          "1e11",
+          "0",
+          "0",
+          "0.4",
+          "15",
+          "$r_e",
+          "4"
+        ],
+        "massToLight": "2.5",
+        "template": "elliptical"
+      },
+      {
+        "uid": "component_1",
+        "category": "source",
+        "kind": "sersic",
+        "label": "sersic_4",
+        "parameters": [
+          "$z_source",
+          "1",
+          "0",
+          "0",
+          "0.2",
+          "0",
+          "$re_source",
+          "4"
+        ],
+        "luminosity": "2e44",
+        "template": "spiral"
+      },
+      {
+        "uid": "component_1",
+        "category": "lens",
+        "kind": "anfw",
+        "label": "anfw_4",
+        "parameters": [
+          "$z_lens",
+          "$m_halo_sat",
+          "1.5",
+          "1",
+          "0.2",
+          "45",
+          "$c_halo_sat",
+          "0"
+        ]
+      },
+      {
+        "uid": "component_2",
+        "category": "lens",
+        "kind": "sers",
+        "label": "sers_5",
+        "parameters": [
+          "$z_lens",
+          "$m_star_sat",
+          "1.5",
+          "1",
+          "0.2",
+          "45",
+          "$re_sat",
+          "4"
+        ],
+        "massToLight": "2.5",
+        "template": "elliptical"
+      }
+    ],
+    "variables": [
+      {
+        "name": "z_lens",
+        "value": "0.3"
+      },
+      {
+        "name": "z_source",
+        "value": "1.25"
+      },
+      {
+        "name": "m_halo",
+        "value": "2e12"
+      },
+      {
+        "name": "c_halo",
+        "value": "!parameters.halo_concentration_mass($m_halo,$z_lens)"
+      },
+      {
+        "name": "m_star",
+        "value": "!parameters.halo_to_stellar_mass(np.log10($m_halo),$z_lens)"
+      },
+      {
+        "name": "R_e",
+        "value": "!parameters.galaxy_effective_radius_mass($z_lens,np.log10($m_star),\"early\")"
+      },
+      {
+        "name": "r_e",
+        "value": "!parameters.log10_kpc_to_arcsec(np.log10($R_e),$z_lens)"
+      },
+      {
+        "name": "m_core",
+        "value": "5e8"
+      },
+      {
+        "name": "r_core",
+        "value": "!parameters.log10_kpc_to_arcsec(np.log10(0.16),$z_lens)"
+      },
+      {
+        "name": "source_Lergs",
+        "value": "2e44"
+      },
+      {
+        "name": "source_Lsun",
+        "value": "$source_Lergs/3.826e33"
+      },
+      {
+        "name": "source_ML",
+        "value": "1.5"
+      },
+      {
+        "name": "source_Msun",
+        "value": "$source_Lsun*$source_ML"
+      },
+      {
+        "name": "Re_source",
+        "value": "!parameters.galaxy_effective_radius_mass($z_source,np.log10($source_Msun),\"early\")"
+      },
+      {
+        "name": "re_source",
+        "value": "!parameters.log10_kpc_to_arcsec(np.log10($Re_source),$z_source)"
+      },
+      {
+        "name": "m_halo_sat",
+        "value": "1e12"
+      },
+      {
+        "name": "c_halo_sat",
+        "value": "!parameters.halo_concentration_mass($m_halo_sat,$z_lens)"
+      },
+      {
+        "name": "m_star_sat",
+        "value": "!parameters.halo_to_stellar_mass(np.log10($m_halo_sat),$z_lens)"
+      },
+      {
+        "name": "Re_sat",
+        "value": "!parameters.galaxy_effective_radius_mass($z_lens,np.log10($m_star_sat),\"early\")"
+      },
+      {
+        "name": "re_sat",
+        "value": "!parameters.log10_kpc_to_arcsec(np.log10($Re_sat),$z_lens)"
+      }
+    ],
+    "functions": [],
+    "functionText": "$z_lens = 0.3\n$z_source = 1.25\n$m_halo = 2e12\n$c_halo = !parameters.halo_concentration_mass($m_halo,$z_lens)\n$m_star = !parameters.halo_to_stellar_mass(np.log10($m_halo),$z_lens)\n$R_e = !parameters.galaxy_effective_radius_mass($z_lens,np.log10($m_star),\"early\")\n$r_e = !parameters.log10_kpc_to_arcsec(np.log10($R_e),$z_lens)\n$m_core = 5e8\n$r_core = !parameters.log10_kpc_to_arcsec(np.log10(0.16),$z_lens)\n$source_Lergs=2e44\n$source_Lsun=$source_Lergs/3.826e33\n$source_ML=1.5\n$source_Msun=$source_Lsun*$source_ML\n$Re_source = !parameters.galaxy_effective_radius_mass($z_source,np.log10($source_Msun),\"early\")\n$re_source = !parameters.log10_kpc_to_arcsec(np.log10($Re_source),$z_source)\n\n$m_halo_sat = 1e12\n$c_halo_sat = !parameters.halo_concentration_mass($m_halo_sat,$z_lens)\n$m_star_sat = !parameters.halo_to_stellar_mass(np.log10($m_halo_sat),$z_lens)\n$Re_sat = !parameters.galaxy_effective_radius_mass($z_lens,np.log10($m_star_sat),\"early\")\n$re_sat = !parameters.log10_kpc_to_arcsec(np.log10($Re_sat),$z_lens)",
+    "functionDefinitions": "$z_lens = 0.3\n$z_source = 1.25\n$m_halo = 2e12\n$c_halo = !parameters.halo_concentration_mass($m_halo,$z_lens)\n$m_star = !parameters.halo_to_stellar_mass(np.log10($m_halo),$z_lens)\n$R_e = !parameters.galaxy_effective_radius_mass($z_lens,np.log10($m_star),\"early\")\n$r_e = !parameters.log10_kpc_to_arcsec(np.log10($R_e),$z_lens)\n$m_core = 5e8\n$r_core = !parameters.log10_kpc_to_arcsec(np.log10(0.16),$z_lens)\n$source_Lergs=2e44\n$source_Lsun=$source_Lergs/3.826e33\n$source_ML=1.5\n$source_Msun=$source_Lsun*$source_ML\n$Re_source = !parameters.galaxy_effective_radius_mass($z_source,np.log10($source_Msun),\"early\")\n$re_source = !parameters.log10_kpc_to_arcsec(np.log10($Re_source),$z_source)\n\n$m_halo_sat = 1e12\n$c_halo_sat = !parameters.halo_concentration_mass($m_halo_sat,$z_lens)\n$m_star_sat = !parameters.halo_to_stellar_mass(np.log10($m_halo_sat),$z_lens)\n$Re_sat = !parameters.galaxy_effective_radius_mass($z_lens,np.log10($m_star_sat),\"early\")\n$re_sat = !parameters.log10_kpc_to_arcsec(np.log10($Re_sat),$z_lens)"
+  },
+  "created": 1793329367788938013
+}

@@ -12,29 +12,59 @@ The website does not replace the physics engine. It generates the input files, r
 - `glafic` input preview
 - Simulation execution through the bundled `glafic` binary
 - Synthetic I-band image generation with detector effects
-- Lens diagnostic products: critical curves, caustics, and radial profiles
+- Lens diagnostic products: critical curves, caustics, radial profiles, and 2D lens-property maps
 - Past-results gallery with side-by-side comparison and residual images
 - Single-run and CPU-parallel batch execution with live progress
 - Gaussian potential (`gaupot`) fields follow glafic's manual: `z_lens`, `z_source/fid`, `x`, `y`, `e_p`, `theta_e`, `sigma`, `kappa_0`
 
 ## Quick start
 
-Compile glafic on your system. For guidance, refer to the glafic2 github repository. Copy the compiled executable into gflex/
+The installers build and install `glafic` and its native dependencies
+(CFITSIO, FFTW3, GSL, a C compiler, and `make`) for you. They also create an
+isolated Python environment and install the Python dependencies from
+`requirements.txt`.
 
-From the project directory:
+### Linux and macOS
 
-```powershell
-pip install -r requirements.txt
-python server.py
+From the project directory, run:
+
+```bash
+bash install.sh
+bash run.sh
 ```
 
-Then open:
+The Linux installer supports Debian/Ubuntu, Fedora/RHEL, and Arch Linux. The
+macOS installer uses Homebrew; install Homebrew first if it is not already
+available. The installer downloads the pinned upstream `glafic` v2.1.15
+source release, builds it locally, and places the executable in the project
+root.
+
+### Windows (WSL2 only)
+
+Run PowerShell as a normal user from the project directory:
+
+```powershell
+.\install.ps1
+.\run.ps1
+```
+
+Native Windows execution is not supported. The installer uses WSL2 Ubuntu
+because upstream `glafic` is a Unix-oriented C program. If WSL is not
+installed, `install.ps1` enables Ubuntu and may request a Windows restart; run
+the installer again after restarting. The application and all dependencies are
+then installed inside WSL, while the project remains accessible from Windows.
+
+After starting the server on any OS, open:
 
 ```text
 http://127.0.0.1:8765
 ```
 
 The web app is a standard-library HTTP server with no frontend build step.
+
+To remove the generated environment and build cache, delete `.venv/` and
+`.build/`. The `runs/` directory contains user-generated results and is not
+removed by the installers.
 
 ## How the app works
 
@@ -126,8 +156,12 @@ are saved in `ie_band_data.json`. The same linear detector values are also writt
 `ie_band_linear.fits` without the display asinh stretch. In the web app, you can adjust
 the display stretch by clicking the fullscreen button and adjusting the asinh stretch
 bar. Once the critical curves are computed, you can access the critical curves in the
-image and the other lens information (for example caustics, convergence, and
-magnification) in the `Lens Info` tab.
+image and the other lens information (including caustics, convergence, magnification,
+deflection, and shear) in the `Lens Info` tab. The image and all diagnostic plots use
+the mathematical convention +x to the right and +y upward. The 2D maps are generated
+from the planes written by GLAFIC's `writelens` command and use the magma color scale
+with logarithmic normalization; signed deflection and shear planes use symmetric-log
+normalization so their signs remain visible.
 
 ## Typical workflow
 
@@ -156,14 +190,16 @@ Each run directory usually contains files such as:
 - `run.input` — `glafic` input file
 - `image.fits` / `source.fits` — emitted simulation maps
 - `ie_band.png` — grayscale I-band preview
+- `ie_band_critical.png` — I-band preview with the critical curve overlaid
 - `ie_band_data.json` — normalized detector-plane values used for display
 - `ie_band_linear.fits` — linear normalized detector-plane values without display stretch
 - `header.json` — resolved configuration, variables, lenses, and sources for this run
-- `lens_image.fits` — unstretched physical-flux lensed image plus source-light FITS product
+- `lens_image.fits` — unstretched physical-flux lensed image plus source light and luminous lens light
 - `lensed_image_only.fits` — unstretched physical-flux lensed image component without source light
-- `lensing_galaxy_light.fits` — unstretched physical-flux source-light FITS product
+- `lensing_galaxy_light.fits` — unstretched physical-flux unlensed source-light FITS product
+- `luminous_lens_light.fits` — unstretched physical-flux luminous lens-galaxy light FITS product
 - `web_curves.json` — critical curves, caustics, and lens-information diagnostics
-- `lens_info.png` — radial lens-information plot when diagnostics are complete
+- `lens_info.png` — 2D deflection, convergence, shear, and magnification maps plus radial profiles when diagnostics are complete
 
 The FITS values are scaled by `1e30` for numerical readability, with
 `BUNIT = 1e30 erg s-1 cm-2 pixel-1`. The lensed and unlensed source maps are

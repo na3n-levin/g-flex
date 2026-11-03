@@ -22,6 +22,7 @@ from astropy.io import fits
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, SymLogNorm
 from scipy.ndimage import map_coordinates
 
 ROOT = Path(__file__).resolve().parent
@@ -240,7 +241,7 @@ def critical_curves(run_dir: Path) -> dict[str, list[list[list[float]]]]:
 def curve_cache_key(payload: dict) -> str:
     config = payload.get("config", {})
     identity = {
-        "profile_axis": "caustic-major-v3-abs-mu-range-0.5arcsec",
+        "profile_axis": "caustic-major-v6-abs-mu-range-0.5arcsec-native-xy",
         "cosmology": {key: config.get(key) for key in ("omega", "lambda", "weos", "hubble")},
         "pix_ext": config.get("pix_ext"),
         "pix_poi": config.get("pix_poi"),
@@ -289,8 +290,6 @@ def lens_info(run_dir: Path, curves: dict) -> dict:
     inverse_magnification = data[6]
     height, width = kappa.shape
     pixel_size = (SIMULATION_BOUNDS[1] - SIMULATION_BOUNDS[0]) / width
-    x_coords = (np.arange(width) + 0.5) * pixel_size + SIMULATION_BOUNDS[0]
-    y_coords = (np.arange(height) + 0.5) * pixel_size + SIMULATION_BOUNDS[2]
     angle = caustic_major_axis(curves)
     cosine, sine = math.cos(angle), math.sin(angle)
     x_limit = (SIMULATION_BOUNDS[1] - SIMULATION_BOUNDS[0]) / (2.0 * max(abs(cosine), 1.0e-12))
@@ -307,21 +306,85 @@ def lens_info(run_dir: Path, curves: dict) -> dict:
     magnifications = np.abs(np.divide(1.0, sampled_inverse, out=np.full_like(sampled_inverse, np.nan), where=np.abs(sampled_inverse) > 1.0e-8))
     clean = lambda values: [float(value) if np.isfinite(value) else None for value in values]
     result = {"r": clean(coordinates), "kappa": clean(sampled_kappa), "magnification": clean(magnifications), "angle": math.degrees(angle)}
-    write_lens_info_plot(run_dir, result)
+    write_lens_info_plot(run_dir, result, data)
     return result
 
 
-def write_lens_info_plot(run_dir: Path, profile: dict) -> Path:
+def _map_norm(values: np.ndarray, signed: bool) -> LogNorm | SymLogNorm:
+    finite = np.asarray(values, dtype=float)[np.isfinite(values)]
+    if finite.size == 0:
+        return SymLogNorm(linthresh=1.0, vmin=-1.0, vmax=1.0) if signed else LogNorm(vmin=1.0, vmax=10.0)
+    if signed:
+        limit = max(float(np.max(np.abs(finite))), np.finfo(float).tiny)
+        linthresh = max(float(np.percentile(np.abs(finite), 5.0)), limit * 1.0e-6, np.finfo(float).tiny)
+        return SymLogNorm(linthresh=linthresh, vmin=-limit, vmax=limit)
+    positive = finite[finite > 0.0]
+    if positive.size == 0:
+        return LogNorm(vmin=1.0, vmax=10.0)
+    low = max(float(np.percentile(positive, 1.0)), np.finfo(float).tiny)
+    high = max(float(np.percentile(positive, 99.0)), low * 10.0)
+    return LogNorm(vmin=low, vmax=high)
+
+
+def _lens_map_data(run_dir: Path) -> np.ndarray:
+    filename = run_dir / "_lens.fits"
+    if not filename.exists():
+        filename = run_dir / "lens.fits"
+    with fits.open(filename, memmap=True) as hdul:
+        data = next((np.asarray(hdu.data, dtype=float) for hdu in hdul if hdu.data is not None), None)
+    if data is None or data.ndim != 3 or data.shape[0] < 6:
+        raise ValueError("Unsupported writelens FITS layout")
+    return data
+
+
+def write_lens_info_plot(run_dir: Path, profile: dict, maps: np.ndarray | None = None) -> Path:
+    if maps is None:
+        maps = _lens_map_data(run_dir)
     radius = np.asarray(profile.get("r", []), dtype=float)
-    figure, axes = plt.subplots(1, 2, figsize=(10.5, 4.2), constrained_layout=True)
-    figure.suptitle(f"Profiles along caustic major axis ({float(profile.get('angle', 0.0)):.1f} deg)")
-    plots = (("kappa", r"Convergence, $\kappa$", "#b53030"), ("magnification", r"Absolute magnification, $|\mu|$", "#26734d"))
-    for axis, (key, title, color) in zip(axes, plots):
+    figure, axes = plt.subplots(2, 4, figsize=(15, 8), constrained_layout=True)
+    figure.suptitle(
+        f"Lens information (+x right, +y up); profiles along caustic major axis "
+        f"({float(profile.get('angle', 0.0)):.1f} deg)"
+    )
+    map_plots = (
+        (0, r"Deflection $\alpha_x$", True),
+        (1, r"Deflection $\alpha_y$", True),
+        (3, r"Convergence $\kappa$", False),
+        (4, r"Shear $\gamma_1$", True),
+        (5, r"Shear $\gamma_2$", True),
+        (6, r"Absolute magnification $|\mu|$", False),
+    )
+    inverse_magnification = np.asarray(maps[6], dtype=float)
+    magnification = np.abs(
+        np.divide(
+            1.0,
+            inverse_magnification,
+            out=np.full_like(inverse_magnification, np.nan),
+            where=np.abs(inverse_magnification) > 1.0e-8,
+        )
+    )
+    map_values = dict((index, magnification if index == 6 else maps[index]) for index, _, _ in map_plots)
+    for axis, (index, title, signed) in zip(axes.flat, map_plots):
+        image = axis.imshow(
+            map_values[index],
+            origin="lower",
+            cmap="magma",
+            norm=_map_norm(map_values[index], signed),
+            extent=(*SIMULATION_BOUNDS[:2], *SIMULATION_BOUNDS[2:]),
+            aspect="equal",
+        )
+        axis.set_title(title)
+        axis.set_xlabel("x [arcsec]")
+        axis.set_ylabel("y [arcsec]")
+        axis.tick_params(direction="out")
+        figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    plots = (("kappa", r"Convergence profile, $\kappa$", "#b53030"), ("magnification", r"Absolute magnification, $|\mu|$", "#26734d"))
+    for axis, (key, title, color) in zip(axes[1, 2:], plots):
         values = np.asarray(profile.get(key, []), dtype=float)
         valid = np.isfinite(radius) & np.isfinite(values)
         axis.plot(radius[valid], values[valid], color=color, linewidth=1.8)
         axis.set_xlim(-0.5, 0.5)
-        if key == "magnification":
+        if key == "magnification" and np.any(values[valid] > 0.0):
             axis.set_yscale("log")
         axis.set_title(title)
         axis.set_xlabel("Coordinate along caustic major axis [arcsec]")
@@ -331,6 +394,42 @@ def write_lens_info_plot(run_dir: Path, profile: dict) -> Path:
     figure.savefig(run_dir / "lens_info.png", dpi=150, facecolor="white")
     plt.close(figure)
     return run_dir / "lens_info.png"
+
+
+def write_critical_overlay(run_dir: Path, curves: dict) -> Path | None:
+    data_path = run_dir / "ie_band_data.json"
+    metadata_path = run_dir / "web_metadata.json"
+    if not data_path.exists() or not metadata_path.exists():
+        return None
+    data = json.loads(data_path.read_text(encoding="utf-8"))
+    values = np.asarray(data.get("values"), dtype=float)
+    if values.ndim != 2:
+        return None
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    view = metadata.get("view", {})
+    xmin, xmax = float(view["xmin"]), float(view["xmax"])
+    ymin, ymax = float(view["ymin"]), float(view["ymax"])
+    figure, axis = plt.subplots(figsize=(6, 6), constrained_layout=True)
+    axis.imshow(
+        values,
+        cmap="gray",
+        vmin=0.0,
+        vmax=max(float(np.nanpercentile(values, 99.7)), np.finfo(float).tiny),
+        origin="upper",
+        extent=(xmin, xmax, ymin, ymax),
+        aspect="equal",
+    )
+    for segment in curves.get("critical", []):
+        points = np.asarray(segment, dtype=float)
+        if points.ndim == 2 and points.shape[1] == 2:
+            axis.plot(points[:, 0], points[:, 1], color="#d52b2b", linewidth=1.0)
+    axis.set_xlim(xmin, xmax)
+    axis.set_ylim(ymin, ymax)
+    axis.set_axis_off()
+    output = run_dir / "ie_band_critical.png"
+    figure.savefig(output, dpi=150, facecolor="black", pad_inches=0)
+    plt.close(figure)
+    return output
 
 
 def empty_diagnostics(error: str | None = None) -> dict:
@@ -364,6 +463,7 @@ def generate_critical_curves(run_dir: Path, source_redshift: str, cache_path: Pa
         if returncode == 0:
             curves = critical_curves(run_dir)
             curves["lensInfo"] = lens_info(run_dir, curves)
+            write_critical_overlay(run_dir, curves)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_tmp = cache_path.with_suffix(".tmp")
             cache_tmp.write_text(json.dumps(curves), encoding="utf-8")
@@ -444,6 +544,9 @@ def recent_images(limit: int = 50) -> list[dict[str, object]]:
         lens_info_path = image.with_name("lens_info.png")
         if lens_info_path.exists():
             result["lensInfoImage"] = "/" + str(lens_info_path.relative_to(ROOT)).replace("\\", "/")
+        critical_image_path = image.with_name("ie_band_critical.png")
+        if critical_image_path.exists():
+            result["criticalImage"] = "/" + str(critical_image_path.relative_to(ROOT)).replace("\\", "/")
         curves_path = image.with_name("web_curves.json")
         if curves_path.exists():
             diagnostics = json.loads(curves_path.read_text(encoding="utf-8"))
@@ -516,6 +619,7 @@ def _render_result(payload: dict, result, diagnostic_executor: ThreadPoolExecuto
     if isinstance(cached_diagnostics, dict) and "lensInfo" in cached_diagnostics:
         publish_curve_result(result.output_dir, cached_diagnostics)
         write_lens_info_plot(result.output_dir, cached_diagnostics["lensInfo"])
+        write_critical_overlay(result.output_dir, cached_diagnostics)
         curves = cached_diagnostics
         curves_pending = False
     else:
@@ -534,6 +638,7 @@ def _render_result(payload: dict, result, diagnostic_executor: ThreadPoolExecuto
         "curves": curves,
         "lensInfo": curves.get("lensInfo", {"r": [], "kappa": [], "magnification": []}),
         "lensInfoImage": "/" + str((result.output_dir / "lens_info.png").relative_to(ROOT)).replace("\\", "/") if not curves_pending else None,
+        "criticalImage": "/" + str((result.output_dir / "ie_band_critical.png").relative_to(ROOT)).replace("\\", "/") if (result.output_dir / "ie_band_critical.png").exists() else None,
         "diagnosticsPending": curves_pending,
         "diagnosticsUrl": f"/{output}/web_curves.json" if curves_pending else None,
     }
@@ -589,12 +694,13 @@ def _run_job(job_id: str, payload: dict, text: str) -> None:
                         curves=diagnostics,
                         lensInfo=diagnostics.get("lensInfo", entry["lensInfo"]),
                         lensInfoImage="/" + str((ROOT / entry["output"] / "lens_info.png").relative_to(ROOT)).replace("\\", "/") if (ROOT / entry["output"] / "lens_info.png").exists() else None,
+                        criticalImage="/" + str((ROOT / entry["output"] / "ie_band_critical.png").relative_to(ROOT)).replace("\\", "/") if (ROOT / entry["output"] / "ie_band_critical.png").exists() else None,
                         diagnosticsPending=False,
                         diagnosticsUrl=None,
                     )
             job["images"] = sorted(rendered, key=lambda item: item["name"], reverse=True)
             job["status"] = "complete"
-            job["phase"] = f"Runs saved to {(batch_root if run_mode == 'batch' else OUT).relative_to(ROOT)}"
+            job["phase"] = "Complete"
             job["output"] = text
     except Exception as error:
         with jobs_lock:
@@ -764,5 +870,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     recent_images()
-    print(f"Lensing simulator at http://127.0.0.1:{port}")
+    print(f"G-Flex at http://127.0.0.1:{port}")
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

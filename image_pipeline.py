@@ -196,24 +196,41 @@ def _write_physical_fits(
     run_dir: Path,
     lensed_image: np.ndarray,
     source_light: np.ndarray,
+    lens_light: np.ndarray,
 ) -> None:
-    if lensed_image.shape != source_light.shape:
+    if lensed_image.shape != source_light.shape or lensed_image.shape != lens_light.shape:
         raise ValueError(
             f"Cannot combine physical FITS maps with different shapes: "
-            f"{lensed_image.shape} and {source_light.shape}"
+            f"{lensed_image.shape}, {source_light.shape}, and {lens_light.shape}"
         )
+    pixel_size_x = (SIMULATION_BOUNDS[1] - SIMULATION_BOUNDS[0]) / lensed_image.shape[1]
+    pixel_size_y = (SIMULATION_BOUNDS[3] - SIMULATION_BOUNDS[2]) / lensed_image.shape[0]
     header = fits.Header()
     header["BUNIT"] = "1e30 erg s-1 cm-2 pixel-1"
     header["BTYPE"] = "physical flux"
+    header["CTYPE1"] = "X"
+    header["CTYPE2"] = "Y"
+    header["CUNIT1"] = "arcsec"
+    header["CUNIT2"] = "arcsec"
+    header["CRPIX1"] = 1.0
+    header["CRPIX2"] = 1.0
+    header["CRVAL1"] = SIMULATION_BOUNDS[0] + pixel_size_x / 2.0
+    header["CRVAL2"] = SIMULATION_BOUNDS[2] + pixel_size_y / 2.0
+    header["CDELT1"] = pixel_size_x
+    header["CDELT2"] = pixel_size_y
     scaled_lensed_image = np.asarray(lensed_image, dtype=float) * FITS_FLUX_SCALE
     scaled_source_light = np.asarray(source_light, dtype=float) * FITS_FLUX_SCALE
+    scaled_lens_light = np.asarray(lens_light, dtype=float) * FITS_FLUX_SCALE
     fits.PrimaryHDU(data=scaled_lensed_image, header=header).writeto(
         run_dir / "lensed_image_only.fits", overwrite=True
     )
     fits.PrimaryHDU(data=scaled_source_light, header=header).writeto(
         run_dir / "lensing_galaxy_light.fits", overwrite=True
     )
-    fits.PrimaryHDU(data=scaled_lensed_image + scaled_source_light, header=header).writeto(
+    fits.PrimaryHDU(data=scaled_lens_light, header=header).writeto(
+        run_dir / "luminous_lens_light.fits", overwrite=True
+    )
+    fits.PrimaryHDU(data=scaled_lensed_image + scaled_source_light + scaled_lens_light, header=header).writeto(
         run_dir / "lens_image.fits", overwrite=True
     )
 
@@ -240,7 +257,9 @@ def _lens_flux_components(run, shape: tuple[int, int], pixel_size: float, metada
         distance_cm = Planck18.luminosity_distance(redshift).to_value("cm")
         total_flux = mass / mass_to_light * solar_luminosity / (4.0 * math.pi * distance_cm**2)
         axis_ratio = max(1.0 - ellipticity, 1.0e-3)
-        angle = np.radians(position_angle)
+        # GLAFIC measures theta counterclockwise from +y, so its mathematical
+        # major-axis angle from +x is 90 + theta.
+        angle = np.radians(90.0 + position_angle)
         dx, dy = x_grid - x0, y_grid - y0
         xr = dx * np.cos(angle) + dy * np.sin(angle)
         yr = -dx * np.sin(angle) + dy * np.cos(angle)
@@ -290,10 +309,14 @@ def render_i_band(run_dir: str | Path, seed: int = 42, metadata: dict | None = N
         physical_source_light += source_flux_map
         flux_components.append((lensed_flux_map, template, float(source.redshift)))
         extended_index += 1
-    _write_physical_fits(run_dir, physical_lensed_image, physical_source_light)
     pixel_size = float(run.cfg.get("pix_ext", 0.02))
     shape = image_maps[0].shape
-    flux_components.extend(_lens_flux_components(run, shape, pixel_size, metadata))
+    lens_components = _lens_flux_components(run, shape, pixel_size, metadata)
+    flux_components.extend(lens_components)
+    physical_lens_light = np.zeros_like(physical_lensed_image, dtype=float)
+    for lens_map, _, _ in lens_components:
+        physical_lens_light += lens_map
+    _write_physical_fits(run_dir, physical_lensed_image, physical_source_light, physical_lens_light)
     if not flux_components:
         raise ValueError("No bright source or lens components are available for I-band rendering")
     kernel = _moffat_kernel(0.18 / pixel_size)
@@ -320,7 +343,6 @@ def render_i_band(run_dir: str | Path, seed: int = 42, metadata: dict | None = N
     y1 = int(round((view_ymax - SIMULATION_BOUNDS[2]) / DETECTOR_PIXEL_ARCSEC))
     if y1 > noisy.shape[0] or x1 > noisy.shape[1] or x1 <= x0 or y1 <= y0:
         raise ValueError(f"Requested view {view_xmin}:{view_xmax}, {view_ymin}:{view_ymax} exceeds detector image {noisy.shape}")
-    # FITS rows increase toward +y; flip for a screen image with +y upward.
     cropped = np.flipud(noisy[y0:y1, x0:x1])
     height, width = cropped.shape
     background = float(np.median(cropped))
